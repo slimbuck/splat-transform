@@ -251,8 +251,12 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
         const centroidsMinMax = calcMinMax(shDataTable, shColumnNames, indices);
-        const centroidsMin = centroidsMinMax.map(v => v[0]).reduce((a, b) => Math.min(a, b));
-        const centroidsMax = centroidsMinMax.map(v => v[1]).reduce((a, b) => Math.max(a, b));
+        const centroidsMin = new Array(shCoeffs).fill(0).map((_, i) => {
+            return Math.min(centroidsMinMax[i][0], centroidsMinMax[i + shCoeffs][0], centroidsMinMax[i + shCoeffs * 2][0]);
+        });
+        const centroidsMax = new Array(shCoeffs).fill(0).map((_, i) => {
+            return Math.max(centroidsMinMax[i][1], centroidsMinMax[i + shCoeffs][1], centroidsMinMax[i + shCoeffs * 2][1]);
+        });
         const centroidsRow: any = {};
         for (let i = 0; i < centroids.numRows; ++i) {
             centroids.getRow(i, centroidsRow);
@@ -262,9 +266,9 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
                 const y = centroidsRow[shColumnNames[shCoeffs * 1 + j]];
                 const z = centroidsRow[shColumnNames[shCoeffs * 2 + j]];
 
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = 255 * ((x - centroidsMin) / (centroidsMax - centroidsMin));
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = 255 * ((y - centroidsMin) / (centroidsMax - centroidsMin));
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = 255 * ((z - centroidsMin) / (centroidsMax - centroidsMin));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = 255 * ((x - centroidsMin[j]) / (centroidsMax[j] - centroidsMin[j]));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = 255 * ((y - centroidsMin[j]) / (centroidsMax[j] - centroidsMin[j]));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = 255 * ((z - centroidsMin[j]) / (centroidsMax[j] - centroidsMin[j]));
                 centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
             }
         }
