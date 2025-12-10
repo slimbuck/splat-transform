@@ -1,4 +1,3 @@
-import { randomBytes } from 'crypto';
 import { lstat, mkdir, open, rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
@@ -11,25 +10,11 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
 import { logger } from './logger';
 import { ProcessAction, processDataTable } from './process';
-import { isCompressedPly, decompressPly } from './readers/decompress-ply';
-import { readKsplat } from './readers/read-ksplat';
-import { readLcc } from './readers/read-lcc';
-import { readMjs } from './readers/read-mjs';
-import { readPly } from './readers/read-ply';
-import { readSog } from './readers/read-sog';
-import { readSplat } from './readers/read-splat';
-import { readSpz } from './readers/read-spz';
+
 import { Options, Param } from './types';
-import { writeCompressedPly } from './writers/write-compressed-ply';
-import { writeCsv } from './writers/write-csv';
-import { writeHtml } from './writers/write-html';
-import { writeLod } from './writers/write-lod';
-import { writePly } from './writers/write-ply';
-import { writeSog } from './writers/write-sog';
 
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
-
-type OutputFormat = 'csv' | 'sog' | 'lod' | 'compressed-ply' | 'ply' | 'html';
+import { readFile } from './read';
+import { getOutputFormat, writeFile } from './write';
 
 const fileExists = async (filename: string) => {
     try {
@@ -41,139 +26,6 @@ const fileExists = async (filename: string) => {
         }
         throw e; // real error (permissions, etc)
     }
-};
-
-const getInputFormat = (filename: string): InputFormat => {
-    const lowerFilename = filename.toLowerCase();
-
-    if (lowerFilename.endsWith('.mjs')) {
-        return 'mjs';
-    } else if (lowerFilename.endsWith('.ksplat')) {
-        return 'ksplat';
-    } else if (lowerFilename.endsWith('.splat')) {
-        return 'splat';
-    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-        return 'sog';
-    } else if (lowerFilename.endsWith('.ply')) {
-        return 'ply';
-    } else if (lowerFilename.endsWith('.spz')) {
-        return 'spz';
-    } else if (lowerFilename.endsWith('.lcc')) {
-        return 'lcc';
-    }
-
-    throw new Error(`Unsupported input file type: ${filename}`);
-};
-
-const getOutputFormat = (filename: string): OutputFormat => {
-    const lowerFilename = filename.toLowerCase();
-
-    if (lowerFilename.endsWith('.csv')) {
-        return 'csv';
-    } else if (lowerFilename.endsWith('lod-meta.json')) {
-        return 'lod';
-    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-        return 'sog';
-    } else if (lowerFilename.endsWith('.compressed.ply')) {
-        return 'compressed-ply';
-    } else if (lowerFilename.endsWith('.ply')) {
-        return 'ply';
-    } else if (lowerFilename.endsWith('.html')) {
-        return 'html';
-    }
-
-    throw new Error(`Unsupported output file type: ${filename}`);
-};
-
-const readFile = async (filename: string, options: Options, params: Param[]): Promise<DataTable[]> => {
-    const inputFormat = getInputFormat(filename);
-    let result: DataTable[];
-
-    logger.info(`reading '${filename}'...`);
-
-    if (inputFormat === 'mjs') {
-        result = [await readMjs(filename, params)];
-    } else {
-        const inputFile = await open(filename, 'r');
-
-        if (inputFormat === 'ksplat') {
-            result = [await readKsplat(inputFile)];
-        } else if (inputFormat === 'splat') {
-            result = [await readSplat(inputFile)];
-        } else if (inputFormat === 'sog') {
-            result = [await readSog(inputFile, filename)];
-        } else if (inputFormat === 'ply') {
-            const ply = await readPly(inputFile);
-            if (isCompressedPly(ply)) {
-                result = [decompressPly(ply)];
-            } else {
-                if (ply.elements.length !== 1 || ply.elements[0].name !== 'vertex') {
-                    throw new Error(`Unsupported data in file '${filename}'`);
-                }
-                result = [ply.elements[0].dataTable];
-            }
-        } else if (inputFormat === 'spz') {
-            result = [await readSpz(inputFile)];
-        } else if (inputFormat === 'lcc') {
-            result = await readLcc(inputFile, filename, options);
-        }
-
-        await inputFile.close();
-    }
-
-    return result;
-};
-
-const writeFile = async (filename: string, dataTable: DataTable, envDataTable: DataTable | null, options: Options) => {
-    // get the output format, throws on failure
-    const outputFormat = getOutputFormat(filename);
-
-    logger.info(`writing '${filename}'...`);
-
-    // write to a temporary file and rename on success
-    const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
-    const tmpPathname = join(dirname(filename), tmpFilename);
-
-    // open the tmp output file
-    const outputFile = await open(tmpPathname, 'wx');
-
-    try {
-        // write the file data
-        switch (outputFormat) {
-            case 'csv':
-                await writeCsv(outputFile, dataTable);
-                break;
-            case 'sog':
-                await writeSog(outputFile, dataTable, filename, options);
-                break;
-            case 'lod':
-                await writeLod(outputFile, dataTable, envDataTable, filename, options);
-                break;
-            case 'compressed-ply':
-                await writeCompressedPly(outputFile, dataTable);
-                break;
-            case 'ply':
-                await writePly(outputFile, {
-                    comments: [],
-                    elements: [{
-                        name: 'vertex',
-                        dataTable: dataTable
-                    }]
-                });
-                break;
-            case 'html':
-                await writeHtml(outputFile, dataTable, filename, options);
-                break;
-        }
-
-        // flush to disk
-        await outputFile.sync();
-    } finally {
-        await outputFile.close().catch(() => { /* ignore */ });
-    }
-
-    // atomically rename to target filename
-    await rename(tmpPathname, filename);
 };
 
 // combine multiple tables into one
@@ -491,17 +343,17 @@ SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html
 
 ACTIONS (can be repeated, in any order)
-    -t, --translate        <x,y,z>          Translate splats by (x, y, z)
-    -r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z), in degrees
-    -s, --scale            <factor>         Uniformly scale splats by factor
-    -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
-    -N, --filter-nan                        Remove Gaussians with NaN or Inf values
-    -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
-    -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
-    -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
+    -t, --translate        <x,y,z>          Translate gaussians by (x, y, z)
+    -r, --rotate           <x,y,z>          Rotate gaussians by Euler angles (x, y, z), in degrees
+    -s, --scale            <factor>         Uniformly scale gaussians by factor
+    -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands >= n
+    -N, --filter-nan                        Remove gaussians with NaN or Inf values
+    -B, --filter-box       <x,y,z,X,Y,Z>    Remove gaussians outside box (min, max corners)
+    -S, --filter-sphere    <x,y,z,radius>   Remove gaussians outside sphere (center, radius)
+    -V, --filter-value     <name,cmp,value> Keep gaussians where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
-    -l, --lod              <n>              Specify the level of detail, n >= 0.
+    -l, --lod              <n>              Specify the model's level of detail with 0 being the highest, n >= 0.
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
@@ -514,7 +366,7 @@ GLOBAL OPTIONS
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
     -U, --unbundled                         Generate unbundled HTML viewer with separate files
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
-    -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+    -C, --lod-chunk-count  <n>              Approximate number of gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 
 EXAMPLES
