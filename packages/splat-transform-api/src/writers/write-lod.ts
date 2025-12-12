@@ -6,7 +6,7 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 import { TypedArray, DataTable } from '../data-table';
 import { logger } from '../logger';
 import { generateOrdering } from '../ordering';
-import { writeSog } from './write-sog.js';
+import { writeSog } from './write-sog';
 import { Options } from '../types';
 import { BTreeNode, BTree } from '../utils/b-tree';
 

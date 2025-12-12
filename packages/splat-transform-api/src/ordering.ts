@@ -1,4 +1,4 @@
-import { DataTable } from './data-table.js';
+import { DataTable } from './data-table';
 import { logger } from './logger';
 
 // sort the compressed indices into morton order

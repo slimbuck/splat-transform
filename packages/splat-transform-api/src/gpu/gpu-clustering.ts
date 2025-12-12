@@ -15,8 +15,8 @@ import {
     UniformFormat
 } from 'playcanvas';
 
-import { DataTable } from '../data-table.js';
-import { GpuDevice } from './gpu-device.js';
+import { DataTable } from '../data-table';
+import { GpuDevice } from './gpu-device';
 
 const clusterWgsl = (numColumns: number, useF16: boolean) => {
     const floatType = useF16 ? 'f16' : 'f32';

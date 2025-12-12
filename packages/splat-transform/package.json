@@ -1,0 +1,43 @@
+{
+  "name": "@playcanvas/splat-transform",
+  "version": "0.16.0",
+  "author": "PlayCanvas<support@playcanvas.com>",
+  "homepage": "https://playcanvas.com",
+  "description": "CLI tool for 3D Gaussian splat format conversion and transformation",
+  "keywords": [
+    "3d-gaussian-splatting",
+    "cli",
+    "gaussian-splatting",
+    "playcanvas",
+    "supersplat",
+    "typescript"
+  ],
+  "license": "MIT",
+  "bin": {
+    "splat-transform": "bin/cli.mjs"
+  },
+  "bugs": {
+    "url": "https://github.com/playcanvas/splat-transform/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/playcanvas/splat-transform.git",
+    "directory": "packages/splat-transform"
+  },
+  "files": [
+    "dist/",
+    "bin/"
+  ],
+  "dependencies": {
+    "@playcanvas/splat-transform-api": "^0.16.0"
+  },
+  "scripts": {
+    "build": "npx rollup -c",
+    "watch": "npx rollup -c -w"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "module"
+}
+
