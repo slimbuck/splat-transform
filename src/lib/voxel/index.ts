@@ -14,3 +14,5 @@ export {
 } from './sparse-octree.js';
 
 export type { SparseOctree, Bounds } from './sparse-octree.js';
+
+export { filterConnectedComponents } from './voxel-connected-components.js';

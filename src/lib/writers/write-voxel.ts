@@ -17,6 +17,7 @@ import {
     type SparseOctree
 } from '../voxel/sparse-octree';
 import { filterAndFillBlocks } from '../voxel/voxel-filter';
+import { filterConnectedComponents } from '../voxel/voxel-connected-components';
 
 /**
  * Options for writing a voxel octree file.
@@ -166,7 +167,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.log(`voxelizing scene (resolution: ${voxelResolution}, opacity cutoff: ${opacityCutoff})...`);
 
-    logger.progress.begin(7);
+    logger.progress.begin(8);
 
     // Phase 1: Compute Gaussian extents
     logger.progress.step('Computing Gaussian extents');
@@ -421,7 +422,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.progress.step('Filtering voxels');
     accumulator = filterAndFillBlocks(accumulator);
 
-    // Phase 6: Build sparse octree
+    // Phase 6: Remove disconnected clusters
+    logger.progress.step('Filtering connected components');
+    accumulator = filterConnectedComponents(accumulator);
+
+    // Phase 7: Build sparse octree
     logger.progress.step('Building sparse octree');
 
     // Build the sparse octree (gridBounds already computed before voxelization)
@@ -434,7 +439,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
 
-    // Phase 7: Write output files
+    // Phase 8: Write output files
     logger.progress.step('Writing output');
     await writeOctreeFiles(fs, filename, octree);
 
