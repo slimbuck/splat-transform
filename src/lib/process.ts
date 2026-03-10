@@ -5,6 +5,7 @@ import { sortByVisibility } from './data-table/filter-visibility';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
+import { decimateSplats } from './lod/voxel-octree-merge';
 import { logger } from './utils/logger';
 
 /**
@@ -123,6 +124,21 @@ type Lod = {
 };
 
 /**
+ * Decimate splats using Spark-style voxel octree merging.
+ *
+ * Nearby splats are merged into single representative splats using weighted
+ * averaging of position, covariance, color (SH), and extended opacity.
+ */
+type LodMerge = {
+    /** Action type identifier. */
+    kind: 'lodMerge';
+    /** Number of octree levels to merge through (higher = more aggressive decimation). */
+    levels: number;
+    /** Octree base for level spacing (default 1.5, range 1.1-2.0). */
+    base: number;
+};
+
+/**
  * Print a statistical summary to the logger.
  */
 type Summary = {
@@ -166,11 +182,12 @@ type FilterVisibility = {
  * - `filterBox` - Keep splats within a bounding box
  * - `filterSphere` - Keep splats within a sphere
  * - `lod` - Assign LOD level to all splats
+ * - `lodMerge` - Generate discrete LoD levels via voxel octree merging
  * - `summary` - Print statistical summary to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `filterVisibility` - Keep only the most visible splats by opacity * volume
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder | FilterVisibility;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | LodMerge | Summary | MortonOrder | FilterVisibility;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -415,6 +432,13 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 result.getColumnByName('lod').data.fill(processAction.value);
                 break;
             }
+            case 'lodMerge': {
+                result = decimateSplats(result, {
+                    levels: processAction.levels,
+                    base: processAction.base
+                });
+                break;
+            }
             case 'summary': {
                 const summary = computeSummary(result);
                 const markdown = formatMarkdown(summary);
@@ -468,6 +492,7 @@ export {
     type FilterSphere,
     type Param,
     type Lod,
+    type LodMerge,
     type Summary,
     type MortonOrder,
     type FilterVisibility

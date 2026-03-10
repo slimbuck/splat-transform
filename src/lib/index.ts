@@ -28,6 +28,7 @@ export type {
     FilterSphere,
     Param as ProcessParam,
     Lod,
+    LodMerge,
     Summary,
     MortonOrder,
     FilterVisibility

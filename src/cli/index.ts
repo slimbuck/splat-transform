@@ -98,6 +98,8 @@ const parseArguments = async () => {
             'filter-visibility': { type: 'string', short: 'F', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
+            'lod-merge': { type: 'string', multiple: true },
+            'lod-base': { type: 'string', default: '1.5' },
             summary: { type: 'boolean', short: 'm', multiple: true },
             'morton-order': { type: 'boolean', short: 'M', multiple: true }
         }
@@ -298,6 +300,22 @@ const parseArguments = async () => {
                     });
                     break;
                 }
+                case 'lod-merge': {
+                    const levels = parseInteger(t.value);
+                    if (levels < 1 || levels > 20) {
+                        throw new Error(`Invalid lod-merge value: ${t.value}. Must be between 1 and 20.`);
+                    }
+                    const lodBase = parseNumber(v['lod-base']);
+                    if (lodBase < 1.1 || lodBase > 2.0) {
+                        throw new Error(`Invalid lod-base value: ${v['lod-base']}. Must be between 1.1 and 2.0.`);
+                    }
+                    current.processActions.push({
+                        kind: 'lodMerge',
+                        levels,
+                        base: lodBase
+                    });
+                    break;
+                }
                 case 'summary':
                     current.processActions.push({
                         kind: 'summary'
@@ -375,6 +393,8 @@ ACTIONS (can be repeated, in any order)
                                               Use n% to keep a percentage of Gaussians
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
+        --lod-merge        <n>              Generate n discrete LoD levels via voxel octree merging (2-8)
+        --lod-base         <n>              Octree base for LoD merging (1.1-2.0). Default: 1.5
     -m, --summary                           Print per-column statistics to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 

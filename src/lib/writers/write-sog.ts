@@ -232,17 +232,35 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name)))
         );
 
-        // generate and store sigmoid(opacity) [0..1]
-        const opacity = dataTable.getColumnByName('opacity').data;
-        const opacityData = new Uint8Array(opacity.length);
-        for (let i = 0; i < numRows; ++i) {
-            opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
+        // compute direct alpha values: d_opacity if available (supports D > 1), else sigmoid(opacity)
+        const dOpacityCol = dataTable.getColumnByName('d_opacity');
+        const alphaValues = new Float32Array(numRows);
+
+        if (dOpacityCol) {
+            const dOpacity = dOpacityCol.data;
+            for (let i = 0; i < numRows; ++i) {
+                alphaValues[i] = dOpacity[i];
+            }
+        } else {
+            const opacity = dataTable.getColumnByName('opacity').data;
+            for (let i = 0; i < numRows; ++i) {
+                alphaValues[i] = sigmoid(opacity[i]);
+            }
         }
-        colorData.labels.addColumn(new Column('opacity', opacityData));
+
+        // quantize alpha values into 256-entry codebook
+        const alphaData = quantize1d(
+            new DataTable([new Column('alpha', alphaValues)])
+        );
+
+        colorData.labels.addColumn(new Column('opacity', alphaData.labels.getColumn(0).data));
 
         await writeTableData('sh0.webp', colorData.labels);
 
-        return Array.from(colorData.centroids.getColumn(0).data);
+        return {
+            codebook: Array.from(colorData.centroids.getColumn(0).data),
+            alphaCodebook: Array.from(alphaData.centroids.getColumn(0).data)
+        };
     };
 
     const writeSH = async (shBands: number) => {
@@ -330,7 +348,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const scalesCodebook = await writeScales();
 
     logger.progress.step('Compressing colors');
-    const colorsCodebook = await writeColors();
+    const colorsResult = await writeColors();
 
     let shN = null;
     if (shBands > 0) {
@@ -341,7 +359,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     // construct meta.json
     const meta: any = {
-        version: 2,
+        version: 3,
         asset: {
             generator: `splat-transform v${version}`
         },
@@ -362,8 +380,11 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             files: ['quats.webp']
         },
         sh0: {
-            codebook: colorsCodebook,
+            codebook: colorsResult.codebook,
             files: ['sh0.webp']
+        },
+        alpha: {
+            codebook: colorsResult.alphaCodebook
         },
         ...(shN ? { shN } : {})
     };
