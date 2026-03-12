@@ -393,7 +393,7 @@ ACTIONS (can be repeated, in any order)
                                               Use n% to keep a percentage of Gaussians
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
-        --lod-merge        <n>              Generate n discrete LoD levels via voxel octree merging (2-8)
+        --lod-merge        <n>              Decimate splats via voxel octree merging, n = aggressiveness (1-20)
         --lod-base         <n>              Octree base for LoD merging (1.1-2.0). Default: 1.5
     -m, --summary                           Print per-column statistics to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
