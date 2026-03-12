@@ -17,7 +17,6 @@ import {
     type SparseOctree
 } from '../voxel/sparse-octree';
 import { filterAndFillBlocks } from '../voxel/voxel-filter';
-import { filterConnectedComponents } from '../voxel/voxel-connected-components';
 
 /**
  * Options for writing a voxel octree file.
