@@ -101,6 +101,7 @@ const parseArguments = async () => {
             'filter-box': { type: 'string', short: 'B', multiple: true },
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
             'decimate': { type: 'string', short: 'F', multiple: true },
+            'filter-outliers': { type: 'string', short: 'Q', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
             summary: { type: 'boolean', short: 'm', multiple: true },
@@ -384,6 +385,22 @@ const parseArguments = async () => {
                     });
                     break;
                 }
+                case 'filter-outliers': {
+                    const parts = t.value.split(',').map((p: string) => p.trim());
+                    const multiplier = parseNumber(parts[0]);
+                    if (multiplier <= 0) {
+                        throw new Error(`Invalid filter-outliers multiplier: ${parts[0]}. Must be a positive number.`);
+                    }
+                    const action: { kind: 'filterOutliers'; multiplier: number; columns?: string[] } = {
+                        kind: 'filterOutliers',
+                        multiplier
+                    };
+                    if (parts.length > 1) {
+                        action.columns = parts.slice(1);
+                    }
+                    current.processActions.push(action);
+                    break;
+                }
             }
         }
     }
@@ -421,6 +438,7 @@ ACTIONS (can be repeated, in any order)
                                               opacity, scale_*, f_dc_* use transformed values
                                               (linear opacity 0-1, linear scale, linear color 0-1).
                                               Append _raw for raw PLY values (e.g. opacity_raw).
+    -Q, --filter-outliers  <mult[,cols...]>  Remove outliers using IQR filtering (e.g. 3.0 or 3,scale_0,scale_1)
     -F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
                                               Use n% to keep a percentage of Gaussians
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script

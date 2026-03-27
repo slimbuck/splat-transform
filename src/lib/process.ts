@@ -1,6 +1,6 @@
 import { Quat, Vec3 } from 'playcanvas';
 
-import { Column, DataTable } from './data-table/data-table';
+import { Column, DataTable, type TypedArray } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
@@ -155,6 +155,22 @@ type Decimate = {
 };
 
 /**
+ * Remove outlier splats using per-column Interquartile Range (IQR) filtering.
+ *
+ * For each column, computes Q1/Q3 and removes splats whose value
+ * falls outside [Q1 - k * IQR, Q3 + k * IQR]. This is useful for trimming
+ * distant floater Gaussians that inflate scene bounds.
+ */
+type FilterOutliers = {
+    /** Action type identifier. */
+    kind: 'filterOutliers';
+    /** IQR multiplier (higher = more permissive). Default: 3.0 */
+    multiplier?: number;
+    /** Column names to filter on. Default: ['x', 'y', 'z'] */
+    columns?: string[];
+};
+
+/**
  * A processing action to apply to splat data.
  *
  * Actions can transform, filter, or analyze the data:
@@ -166,12 +182,13 @@ type Decimate = {
  * - `filterBands` - Remove spherical harmonic bands above a threshold
  * - `filterBox` - Keep splats within a bounding box
  * - `filterSphere` - Keep splats within a sphere
+ * - `filterOutliers` - Remove spatial outliers using IQR filtering
  * - `lod` - Assign LOD level to all splats
  * - `summary` - Print statistical summary to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder | Decimate;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterOutliers | Param | Lod | Summary | MortonOrder | Decimate;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -405,6 +422,53 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 result = filter(result, predicate);
                 break;
             }
+            case 'filterOutliers': {
+                const numRows = result.numRows;
+                if (numRows >= 4) {
+                    const multiplier = processAction.multiplier ?? 3.0;
+                    const columnNames = processAction.columns ?? ['x', 'y', 'z'];
+
+                    const columnData: TypedArray[] = [];
+                    for (const name of columnNames) {
+                        const col = result.getColumnByName(name);
+                        if (!col) {
+                            throw new Error(`filterOutliers: column '${name}' not found`);
+                        }
+                        columnData.push(col.data);
+                    }
+
+                    const ranges: [number, number][] = [];
+                    for (const data of columnData) {
+                        const sorted = Float32Array.from(data).sort();
+                        const q1 = sorted[Math.floor(numRows * 0.25)];
+                        const q3 = sorted[Math.floor(numRows * 0.75)];
+                        const iqr = q3 - q1;
+                        ranges.push([q1 - multiplier * iqr, q3 + multiplier * iqr]);
+                    }
+
+                    const kept: number[] = [];
+                    for (let j = 0; j < numRows; j++) {
+                        let keep = true;
+                        for (let c = 0; c < columnData.length; c++) {
+                            const v = columnData[c][j];
+                            if (v < ranges[c][0] || v > ranges[c][1]) {
+                                keep = false;
+                                break;
+                            }
+                        }
+                        if (keep) {
+                            kept.push(j);
+                        }
+                    }
+
+                    if (kept.length < numRows) {
+                        const removed = numRows - kept.length;
+                        logger.log(`filterOutliers: removed ${removed} outlier splats (${(removed / numRows * 100).toFixed(1)}%)`);
+                        result = result.clone({ rows: kept });
+                    }
+                }
+                break;
+            }
             case 'param': {
                 // skip params
                 break;
@@ -460,6 +524,7 @@ export {
     type FilterBands,
     type FilterBox,
     type FilterSphere,
+    type FilterOutliers,
     type Param,
     type Lod,
     type Summary,
