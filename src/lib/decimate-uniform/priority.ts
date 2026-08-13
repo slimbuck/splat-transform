@@ -7,8 +7,7 @@ import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED, type Block
 import { KNN_SENTINEL } from './knn-core';
 import { type BlockRange, type ResidentPositions } from './partition';
 import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
-import {
-    alphaDecode, createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea, type SplatView } from '../decimate/moment-match';
+import { alphaDecode, createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea, type SplatView } from '../decimate/moment-match';
 import { WorkerQueue } from '../workers';
 
 /** Halo radius multiplier on the density-estimated k-NN radius. */

@@ -14,6 +14,8 @@
  * construction time (see `sharedCincludes` in the rasterizer ctor).
  *
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
+ * @param alphaMax - Opacity ceiling; above 1 the over-unity profile is used.
+ * @param plateau - Plateau shrink applied to the over-unity profile's flat top.
  * @returns WGSL source for the project compute shader.
  */
 const projectWgsl = (coeffsPerChannel: number, alphaMax: number = 1, plateau: number = 1) => /* wgsl */`

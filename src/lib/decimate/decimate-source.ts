@@ -11,6 +11,7 @@ import { planBlockMerges } from './block-plan';
 import { prepareGpuBlock, type PreparedBlock } from './block-prepare';
 import { createBlockProducerSource, type DestBuffers } from './block-producer';
 import { mergeStream } from './merge-stream';
+import { type Compensation } from './moment-match';
 import { buildBlockHalo, kdPartition, coherenceRuns, type ResidentPositions } from './partition';
 import { runPriorityPass, type CandidateArrays } from './priority';
 import { selectMerges, type SelectionResult } from './select';
@@ -28,7 +29,6 @@ import { readPly } from '../readers/read-ply';
 import { type DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
-import { type Compensation } from './moment-match';
 
 /** Neighbours per query — unchanged from legacy. */
 const KNN_K = 16;

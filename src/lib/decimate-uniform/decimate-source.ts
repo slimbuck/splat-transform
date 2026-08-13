@@ -13,6 +13,7 @@ import {
     type ChunkSourceMetadata
 } from '../chunk';
 import { APP_CHUNK } from './gpu-edge-cost';
+import { type Compensation } from '../decimate/moment-match';
 import { type ReadFileSystem } from '../io/read';
 import { type FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
@@ -20,7 +21,6 @@ import { readPly } from '../readers/read-ply';
 import { type DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
-import { type Compensation } from '../decimate/moment-match';
 
 /** Neighbours per query — unchanged from legacy. */
 const KNN_K = 16;

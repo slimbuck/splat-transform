@@ -61,6 +61,15 @@ type Compensation = {
 
 const DEFAULT_COMPENSATION: Compensation = { mode: 'none', alphaMax: 1, massCal: 1 };
 
+// ---------- sigmoid / logit ----------
+
+const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
+
+const logit = (p: number) => {
+    p = Math.max(1e-7, Math.min(1 - 1e-7, p));
+    return Math.log(p / (1 - p));
+};
+
 /**
  * Module-level rather than a parameter because the mass convention has to be
  * consistent across every consumer in a run — {@link alphaDecode} is reached
@@ -90,6 +99,9 @@ const getCompensation = (): Compensation => active;
  * `min(1, A*exp(-r^2/2))`, whose mass ceiling grows only logarithmically
  * (2.39 at A = 4, 2.79 at A = 6), this profile can actually carry the mass a
  * heavy merge needs.
+ *
+ * @param D - Profile shape parameter.
+ * @returns The mass I(D) the profile carries.
  */
 const profileMass = (D: number): number => {
     if (D <= 1) return D;
@@ -101,6 +113,9 @@ const profileMass = (D: number): number => {
  * Inverse of {@link profileMass}: the shape parameter D whose profile carries
  * mass `m`. Bisection — monotone, a handful of iterations, and only ever runs
  * on merges that exceed unit mass.
+ *
+ * @param m - Target mass.
+ * @returns The shape parameter D with I(D) = m.
  */
 const profileParamForMass = (m: number): number => {
     if (m <= 1) return m;
@@ -118,25 +133,22 @@ const profileParamForMass = (m: number): number => {
  * Internal consumers — merge weights, edge costs — want mass, so an over-unity
  * splat must report I(D), otherwise a merged splat's weight silently
  * under-counts the energy it actually emits.
+ *
+ * @param stored - Stored opacity logit.
+ * @returns The mass the splat carries.
  */
 const alphaDecode = (stored: number) => profileMass(active.alphaMax * sigmoid(stored));
 
 /**
  * Mass -> stored logit. Solves for the shape parameter first, so what lands in
  * the file is D (what the renderer needs), while callers keep thinking in mass.
+ *
+ * @param mass - Mass to encode.
+ * @returns The stored opacity logit.
  */
 const alphaEncode = (mass: number) => {
     const D = profileParamForMass(mass * active.massCal);
     return logit(Math.max(0, Math.min(1, D / active.alphaMax)));
-};
-
-// ---------- sigmoid / logit ----------
-
-const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
-
-const logit = (p: number) => {
-    p = Math.max(1e-7, Math.min(1 - 1e-7, p));
-    return Math.log(p / (1 - p));
 };
 
 const logAddExp = (a: number, b: number) => {

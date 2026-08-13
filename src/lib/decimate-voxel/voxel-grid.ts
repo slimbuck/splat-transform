@@ -33,8 +33,7 @@ type GridDims = { dx: number; dy: number; dz: number };
  * @param n - Input gaussian count.
  * @returns The number of cells to aim for, clamped to [1, n].
  */
-const voxelBudget = (targetCount: number, n: number): number =>
-    Math.max(1, Math.min(n, Math.floor(targetCount / REPS_PER_VOXEL)));
+const voxelBudget = (targetCount: number, n: number): number => Math.max(1, Math.min(n, Math.floor(targetCount / REPS_PER_VOXEL)));
 
 /**
  * Per-axis cell counts, proportional to the bounds extent on each axis so cells
@@ -91,8 +90,7 @@ const fitDims = (
  * @param budget - Cell budget.
  * @returns The subdivision threshold, at least 2.
  */
-const subdivideThreshold = (n: number, budget: number): number =>
-    Math.max(2, Math.ceil((SUBDIVIDE_SLACK * n) / Math.max(1, budget)));
+const subdivideThreshold = (n: number, budget: number): number => Math.max(2, Math.ceil((SUBDIVIDE_SLACK * n) / Math.max(1, budget)));
 
 export {
     REPS_PER_VOXEL,
