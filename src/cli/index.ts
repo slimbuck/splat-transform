@@ -17,6 +17,7 @@ import {
     dataTableToChunkSource,
     decimateSource,
     decimateSourceAdaptive,
+    decimateSourceVoxel,
     DEFAULT_COMPENSATION,
     type Compensation,
     fmtBytes,
@@ -130,12 +131,13 @@ const resolveInput = (arg: string): ResolvedInput => {
 // never dispatched as a data operation).
 type CliAction = ProcessAction | { kind: 'lod'; value: number };
 
-// `--decimate` and `--decimate-adaptive` both produce a decimate action, so
-// which decimator to run rides on the action itself rather than on global
-// options — that way it always describes the action actually executed, with no
-// dependence on flag ordering or on the "exactly one decimate action" check.
-// The extra field is stripped before actions reach the library.
-type CliDecimate = Extract<ProcessAction, { kind: 'decimate' }> & { adaptive: boolean };
+// The decimate flags all produce a decimate action, so which decimator to run
+// rides on the action itself rather than on global options — that way it always
+// describes the action actually executed, with no dependence on flag ordering or
+// on the "exactly one decimate action" check. The extra field is stripped before
+// actions reach the library.
+type DecimateMode = 'uniform' | 'adaptive' | 'voxel';
+type CliDecimate = Extract<ProcessAction, { kind: 'decimate' }> & { mode: DecimateMode };
 
 // Strip the CLI-only lod tags, narrowing back to dispatchable actions.
 const stripLodTags = (actions: CliAction[]): ProcessAction[] => {
@@ -203,6 +205,7 @@ const cliOptionsConfig = {
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
     'decimate-adaptive': { type: 'string', multiple: true },
+    'decimate-voxel': { type: 'string', multiple: true },
     'decimate-compensate': { type: 'string' },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
@@ -728,7 +731,8 @@ const parseArguments = async () => {
                     });
                     break;
                 case 'decimate':
-                case 'decimate-adaptive': {
+                case 'decimate-adaptive':
+                case 'decimate-voxel': {
                     const value = t.value.trim();
                     let count: number | null = null;
                     let percent: number | null = null;
@@ -747,11 +751,14 @@ const parseArguments = async () => {
                         }
                     }
 
+                    const mode: DecimateMode = t.name === 'decimate-adaptive' ?
+                        'adaptive' :
+                        (t.name === 'decimate-voxel' ? 'voxel' : 'uniform');
                     const decimate: CliDecimate = {
                         kind: 'decimate',
                         count,
                         percent,
-                        adaptive: t.name === 'decimate-adaptive'
+                        mode
                     };
                     current.processActions.push(decimate);
                     break;
@@ -834,11 +841,14 @@ ACTIONS (executed in order; can be repeated)
                                               Lower memory, and better at depth on uniformly-sized
                                               Gaussians: uniform texture, single objects, snow.
         --decimate-adaptive <n|n%>          Simplify, allocating removal by local error (adaptive).
+                                              Much better on mixed-scale content such as skies.
+        --decimate-voxel   <n|n%>           Simplify over a space-uniform voxel grid, keeping at
+                                              least one Gaussian per occupied voxel (GPU required).
+                                              The only mode with that coverage floor.
+                                              Any of these must be the final action, with a .ply output
         --decimate-compensate <mode>        Merged mass above unit alpha: none (default, discard),
                                             alpha[:max[:massCal]] (keep as peak opacity >1),
                                             scale (grow footprint to fit).
-                                              Much better on mixed-scale content such as skies.
-                                              Either must be the final action, with a .ply output
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory
     -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
@@ -1306,21 +1316,32 @@ const main = async () => {
                     scratchDir: options.scratchDir ?? dirname(outputFilename),
                     remove: (path: string) => unlink(path)
                 };
-                combined = decimateAction.adaptive ?
-                    await decimateSourceAdaptive(combined, pool, {
+                if (decimateAction.mode === 'voxel') {
+                    if (!deviceCreator) {
+                        failExit('--decimate-voxel requires a GPU device (no WebGPU adapter available)');
+                    }
+                    combined = await decimateSourceVoxel(combined, pool, {
                         targetCount: keepCount,
                         createDevice: deviceCreator,
-                        memoryBudgetBytes: options.memoryBudgetBytes,
-                        compensation: options.compensation,
-                        spill
-                    }) :
-                    await decimateSource(combined, pool, {
+                        compensation: options.compensation
+                    });
+                } else if (decimateAction.mode === 'adaptive') {
+                    combined = await decimateSourceAdaptive(combined, pool, {
                         targetCount: keepCount,
                         createDevice: deviceCreator,
                         memoryBudgetBytes: options.memoryBudgetBytes,
                         compensation: options.compensation,
                         spill
                     });
+                } else {
+                    combined = await decimateSource(combined, pool, {
+                        targetCount: keepCount,
+                        createDevice: deviceCreator,
+                        memoryBudgetBytes: options.memoryBudgetBytes,
+                        compensation: options.compensation,
+                        spill
+                    });
+                }
             }
 
             logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands`);

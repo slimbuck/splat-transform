@@ -6,6 +6,23 @@ import { createSimTile, fillSimTile } from '../../src/lib/decimate-voxel/similar
 
 const SH_C0 = 0.28209479177387814;
 
+/**
+ * Deterministic PRNG for fixtures. Use this rather than a hand-rolled LCG: a
+ * plain `seed * 1103515245 + 12345` exceeds 2^53 in JS, loses its low bits, and
+ * collapses into a short cycle that fills the scene with exact duplicate splats
+ * — which then silently exercises the duplicate-coverage path instead of the
+ * behaviour under test.
+ */
+const mulberry32 = (seed) => {
+    let t = seed >>> 0;
+    return () => {
+        t += 0x6d2b79f5;
+        let r = Math.imul(t ^ (t >>> 15), t | 1);
+        r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+};
+
 /** Display RGB -> the DC coefficient that decodes back to it. */
 const dcFor = rgb => (rgb - 0.5) / SH_C0;
 
@@ -55,4 +72,4 @@ const tileOf = (splats) => {
     return fillSimTile(view, indices, splats.length, createSimTile(splats.length));
 };
 
-export { SH_C0, dcFor, logit, makeView, tileOf };
+export { SH_C0, dcFor, logit, mulberry32, makeView, tileOf };

@@ -205,6 +205,39 @@ describe('CLI decimate (terminal PLY restriction)', () => {
         assert.strictEqual(parseInt(match[1], 10), 2);
         await rm(dir, { recursive: true, force: true });
     });
+
+    it('--decimate-voxel reports that it needs a GPU when none is available', async () => {
+        const { mkdtemp, rm } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const dir = await mkdtemp(join(tmpdir(), 'st-decimate-voxel-cli-'));
+        const outPath = join(dir, 'out.ply');
+
+        // The voxel decimator has no CPU path, so `--gpu cpu` must fail loudly
+        // rather than silently falling back to a different algorithm.
+        const result = await runCli([
+            '--gpu', 'cpu',
+            'test/fixtures/splat/minimal.splat',
+            '--decimate-voxel', '50%',
+            outPath
+        ]);
+        await rm(dir, { recursive: true, force: true });
+        assert.notStrictEqual(result.code, 0, 'CLI should reject --decimate-voxel without a GPU');
+        assert.match(result.stderr, /--decimate-voxel requires a GPU device/);
+    });
+
+    it('--decimate-voxel is accepted as a final action targeting .ply', async () => {
+        // Placement rules are shared by every decimate flag; check the new one is
+        // wired into them rather than special-cased.
+        const result = await runCli([
+            '--gpu', 'cpu',
+            'test/fixtures/splat/minimal.splat',
+            '--decimate-voxel', '50%',
+            'null'
+        ]);
+        assert.notStrictEqual(result.code, 0);
+        assert.match(result.stderr, /must be the final action and the output must be \.ply/);
+    });
 });
 
 describe('CLI filter-nan (zero-norm rotation)', () => {

@@ -52,6 +52,11 @@ export type { DecimateOptions, DecimateSpill } from './decimate-uniform';
 export { decimateSourceAdaptive } from './decimate';
 export type { DecimateAdaptiveOptions, DecimateAdaptiveSpill } from './decimate';
 
+// The voxel decimator (--decimate-voxel): space-uniform allocation with a
+// per-voxel coverage floor. GPU-only; see lib/decimate-voxel/README.md
+export { decimateSourceVoxel } from './decimate-voxel';
+export type { DecimateVoxelOptions } from './decimate-voxel';
+
 // Merged-mass compensation, shared by every decimator: discard the excess
 // (`none`), keep it as peak opacity above 1 (`alpha`), or grow the footprint to
 // fit it (`scale`). Orthogonal to how groups are chosen.

@@ -6,6 +6,9 @@
  * scale sigma separated by delta the log-determinant terms cancel exactly and
  * log B = -delta^2 / (8 sigma^2); for equal geometry the whole similarity
  * reduces to the negative squared RGB distance.
+ *
+ * Tolerances allow for the decode's EPS_COV diagonal floor, which perturbs those
+ * forms by roughly EPS_COV/sigma^2 relative.
  */
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
@@ -97,6 +100,8 @@ describe('voxel similarity', () => {
         ]);
         const grown = fillSimTile(view, [0, 1, 2], 3, createSimTile(1));
         assert.strictEqual(grown.count, 3);
-        assert.ok(Math.abs(logSimilarity(grown, 0, 2) - -0.5) < 1e-6);
+        // 2 sigma apart, so log B = -0.5 up to the decode's EPS_COV floor, which
+        // shifts quad by EPS_COV/sigma^2 — here about 2e-6.
+        assert.ok(Math.abs(logSimilarity(grown, 0, 2) - -0.5) < 1e-5);
     });
 });

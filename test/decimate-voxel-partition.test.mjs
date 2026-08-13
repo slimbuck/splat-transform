@@ -14,12 +14,7 @@ import {
     NORM_MAX, normalizePositions, countOccupied, buildPartition, leavesTouch, leavesByCell, neighbourLeaves
 } from '../src/lib/decimate-voxel/partition.js';
 import { MAX_DEPTH, subdivideThreshold, voxelBudget } from '../src/lib/decimate-voxel/voxel-grid.js';
-
-/** Deterministic PRNG so failures reproduce. */
-const rng = (seed) => () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-};
+import { mulberry32 as rng } from './helpers/voxel-splats.mjs';
 
 const positionsOf = (points) => {
     const pos = new Float32Array(points.length * 3);

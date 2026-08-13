@@ -17,11 +17,32 @@
  * once, not per pair.
  */
 
-import { alphaDecode, det3, quatToRotmat, sigmaFromRotVar, type SplatView } from '../decimate/moment-match';
+import { EPS_COV, alphaDecode, det3, quatToRotmat, sigmaFromRotVar, type SplatView } from '../decimate/moment-match';
 import { SH_C0 } from '../value-transforms';
 
 /** Representative-weight floor (spec §5, ε_w). */
 const EPS_W = 1e-12;
+
+/**
+ * Smallest scale a splat is compared at, as a fraction of its own longest axis.
+ *
+ * This caps the covariance condition number at 1e4, which is what the f32
+ * kernels need: the quadratic form divides by |Σ̄|, so an ill-conditioned Σ̄
+ * amplifies rounding error in proportion. Measured — agreement with this f64
+ * path is exact up to an anisotropy of 100 and degrades beyond it.
+ *
+ * Being a *ratio* is the point. An absolute floor like EPS_COV depends on the
+ * scene's units: it caps the condition number at maxVariance/EPS_COV, so a scene
+ * authored at 10x the scale is 100x worse conditioned, which is exactly how a 2D
+ * capture reached 6e5 and lost the kernels' agreement.
+ *
+ * It only affects *comparison*. Merged output geometry comes from `mergeGroup`,
+ * which sees the unclamped scales. And the clamp arguably improves the metric:
+ * the true out-of-plane Mahalanobis penalty for a zero-thickness splat is
+ * infinite, which carries no information about which neighbour represents it
+ * best.
+ */
+const SCALE_FLOOR_RATIO = 1e-2;
 
 /**
  * Decoded per-splat similarity inputs for one contiguous run of splats.
@@ -93,12 +114,25 @@ const fillSimTile = (
         let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
         const qn = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
         qw *= qn; qx *= qn; qy *= qn; qz *= qn;
-        const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
-        const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
-        const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
+        const rx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
+        const ry = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
+        const rz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
+
+        // Keep the ellipsoid comparable, not degenerate — see SCALE_FLOOR_RATIO.
+        const floor = Math.max(rx, ry, rz) * SCALE_FLOOR_RATIO;
+        const sx = Math.max(rx, floor);
+        const sy = Math.max(ry, floor);
+        const sz = Math.max(rz, floor);
 
         quatToRotmat(qw, qx, qy, qz, sig, o9);
         sigmaFromRotVar(sig, o9, sx * sx, sy * sy, sz * sz, sig, o9);
+
+        // Same diagonal regularizer the merge site and the edge cost use. The
+        // ratio floor above already handles conditioning; this catches the
+        // all-axes-zero case, where there is no longest axis to scale from.
+        sig[o9] += EPS_COV;
+        sig[o9 + 4] += EPS_COV;
+        sig[o9 + 8] += EPS_COV;
 
         const det = det3(sig, o9);
         logDet[slot] = det > 0 && Number.isFinite(det) ? Math.log(det) : -Infinity;
@@ -128,10 +162,10 @@ const fillSimTile = (
  * distance.
  *
  * Returns -Infinity for degenerate input — a non-positive or non-finite
- * determinant on either splat or on their mean covariance. The reference relies
- * on the same guard rather than regularizing the diagonal, so no EPS_COV is
- * added here; scales are floored at 1e-12 on decode, which keeps well-formed
- * data far away from the guard.
+ * determinant on either splat or on their mean covariance. With the decode's
+ * EPS_COV floor in place that guard is effectively unreachable, which is the
+ * point: the reference relies on it instead of regularizing, and pays for that
+ * on zero-thickness input.
  *
  * @param tile - Filled tile.
  * @param a - First slot.
@@ -219,6 +253,7 @@ const blendedRadius = (tile: SimTile, slot: number): number => {
 
 export {
     EPS_W,
+    SCALE_FLOOR_RATIO,
     createSimTile,
     fillSimTile,
     logSimilarity,

@@ -13,12 +13,7 @@ import { describe, it } from 'node:test';
 import { groupByRepresentative } from '../src/lib/decimate-voxel/assign.js';
 import { leavesByCell, leavesTouch, neighbourLeaves } from '../src/lib/decimate-voxel/partition.js';
 import { decimateReference, leafAggregates } from '../src/lib/decimate-voxel/reference.js';
-import { makeView } from './helpers/voxel-splats.mjs';
-
-const rng = (seed) => () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-};
+import { makeView, mulberry32 as rng } from './helpers/voxel-splats.mjs';
 
 const boundsOf = (view, n) => {
     const min = [Infinity, Infinity, Infinity];

@@ -27,11 +27,17 @@ const NOVELTY_SCALE = 3;
 /**
  * Log-similarity magnitude below which a candidate counts as fully covered.
  *
- * The reference tests for exactly 0. Our determinant comes from an adjugate
- * expansion rather than a cofactor one, so an exact duplicate lands within a
- * few ulps of 0 instead of on it; the tolerance restores the intent.
+ * The reference tests for exactly 0. We cannot: the determinant comes from an
+ * adjugate expansion rather than a cofactor one, so an exact duplicate lands
+ * near 0 rather than on it — and in the f32 kernels, where log|Σ| is ~-30 and
+ * relative error is 6e-8, "near" means ~1e-7. A tolerance below that would make
+ * the GPU miss every duplicate the CPU catches, so both sides use this one.
+ *
+ * The value is also harmless on its own terms: ν(1e-4) ≈ 3e-5, so anything
+ * inside the tolerance has ~4 orders less priority than genuinely novel content
+ * and could only ever be picked in a voxel that holds nothing but duplicates.
  */
-const COVERED_EPS = 1e-12;
+const COVERED_EPS = 1e-4;
 
 /**
  * Selection state, indexed by absolute tile slot. `nearest[j]` is the best log

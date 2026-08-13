@@ -4,5 +4,7 @@ export { GpuKmeans } from './gpu-kmeans';
 export { GpuKnn } from './gpu-knn';
 export { GpuSplatRasterizer } from './gpu-splat-rasterizer';
 export type { SplatRasterizerOptions } from './gpu-splat-rasterizer';
+export { GpuVoxelSelect } from './gpu-voxel-select';
+export type { VoxelSelectResult } from './gpu-voxel-select';
 export { GpuVoxelization } from './gpu-voxelization';
 export type { BatchSpec, MultiBatchResult } from './gpu-voxelization';
