@@ -4,12 +4,15 @@ import { type DestBuffers } from './block-producer';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, type PriorityContext } from './priority';
 import { WorkerQueue } from '../workers';
+import { type Compensation } from './moment-match';
 
 type BlockMergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
     plans: StoredBlockPlan[];
     prefixes: Uint32Array;
     scratch: PlanScratch;
     nextPositions?: ResidentPositions;
+    /** How merged mass that exceeds unit alpha is handled; default discards it. */
+    compensation?: Compensation;
 };
 
 /**
@@ -79,7 +82,8 @@ async function *blockPlanMergeStream(
                 sizes,
                 colorDim,
                 other: mOther,
-                otherDim
+                otherDim,
+                compensation: ctx.compensation
             }, transfer);
             mergedPos = merged.pos;
             mergedGeo = merged.geo;

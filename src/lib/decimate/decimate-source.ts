@@ -28,6 +28,7 @@ import { readPly } from '../readers/read-ply';
 import { type DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
+import { type Compensation } from './moment-match';
 
 /** Neighbours per query — unchanged from legacy. */
 const KNN_K = 16;
@@ -79,6 +80,13 @@ type DecimateOptions = {
     spill?: DecimateSpill;
     /** Resident-memory budget driving the candidate-K and re-costed-selection policies (default 48 GiB). */
     memoryBudgetBytes?: number;
+    /**
+     * What to do with merged mass a unit-alpha Gaussian cannot carry: discard it
+     * (`none`, the default and the shipped behaviour), keep it as peak opacity
+     * above 1 (`alpha`), or grow the footprint to fit it (`scale`). Orthogonal to
+     * allocation, so the same choice applies to every decimator.
+     */
+    compensation?: Compensation;
 };
 
 // Candidate-K policy: keep 4 when the resident estimate fits the budget,
@@ -540,7 +548,8 @@ const decimateSource = async (
                         plans: storedPlans,
                         prefixes: planPrefixes!,
                         scratch: opts.spill!,
-                        nextPositions
+                        nextPositions,
+                        compensation: opts.compensation
                     }, genChunkSize, tick);
                 }
                 return mergeStream({
@@ -550,7 +559,8 @@ const decimateSource = async (
                     order,
                     blocks,
                     selection: selection!,
-                    nextPositions
+                    nextPositions,
+                    compensation: opts.compensation
                 }, genChunkSize, tick);
             };
 

@@ -27,6 +27,7 @@
  */
 
 import {
+    alphaDecode,
     EPS_COV,
     sigmoid,
     ellipsoidArea,
@@ -91,7 +92,7 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
     for (let i = 0; i < n; i++) {
         const i8 = 8 * i;
 
-        const a = sigmoid(geo[i8 + 7]);
+        const a = alphaDecode(geo[i8 + 7]);
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);

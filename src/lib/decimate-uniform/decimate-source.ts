@@ -20,6 +20,7 @@ import { readPly } from '../readers/read-ply';
 import { type DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
+import { type Compensation } from '../decimate/moment-match';
 
 /** Neighbours per query — unchanged from legacy. */
 const KNN_K = 16;
@@ -61,6 +62,13 @@ type DecimateOptions = {
     spill?: DecimateSpill;
     /** Resident-memory budget driving the candidate-K policy (default 24 GiB). */
     memoryBudgetBytes?: number;
+    /**
+     * What to do with merged mass a unit-alpha Gaussian cannot carry: discard it
+     * (`none`, the default and the shipped behaviour), keep it as peak opacity
+     * above 1 (`alpha`), or grow the footprint to fit it (`scale`). Orthogonal to
+     * allocation, so the same choice applies to every decimator.
+     */
+    compensation?: Compensation;
 };
 
 // Candidate-K policy: keep 4 when the resident estimate fits the budget,
@@ -267,7 +275,7 @@ const decimateSource = async (
         // values for the deferred producer closures.
         const genSrc = src;
         const genChunkSize = genSrc.meta.chunkSize;
-        const streamCtx = { source: genSrc, pool, pos: positions, order, blocks, selection, nextPositions };
+        const streamCtx = { source: genSrc, pool, pos: positions, order, blocks, selection, nextPositions, compensation: opts.compensation };
 
         if (isFinal) {
             // The producer reads the input lazily while the consumer pulls

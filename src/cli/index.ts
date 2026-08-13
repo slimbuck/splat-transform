@@ -17,6 +17,8 @@ import {
     dataTableToChunkSource,
     decimateSource,
     decimateSourceAdaptive,
+    DEFAULT_COMPENSATION,
+    type Compensation,
     fmtBytes,
     fmtCount,
     fmtTime,
@@ -70,6 +72,7 @@ interface CliOptions extends LibOptions {
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
     scratchDir: string | undefined;  // decimation spill location (default: output directory)
     memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
+    compensation: Compensation;  // what merged mass above unit alpha does
 }
 
 const fileExists = async (filename: string) => {
@@ -200,6 +203,7 @@ const cliOptionsConfig = {
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
     'decimate-adaptive': { type: 'string', multiple: true },
+    'decimate-compensate': { type: 'string' },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
@@ -303,6 +307,25 @@ const parseArguments = async () => {
             throw new Error(`Invalid integer value: ${value}`);
         }
         return result;
+    };
+
+    // `none|alpha|scale`, optionally `alpha:<max>` / `alpha:<max>:<massCal>` to
+    // override the opacity range and plateau calibration. Defaults keep the
+    // shipped behaviour: discard the excess.
+    const parseCompensation = (value: string | undefined): Compensation => {
+        if (!value) return DEFAULT_COMPENSATION;
+        const [mode, maxStr, calStr] = value.split(':');
+        if (mode !== 'none' && mode !== 'alpha' && mode !== 'scale') {
+            throw new Error(`Invalid --decimate-compensate mode: ${mode}. Expected none, alpha or scale.`);
+        }
+        if (mode !== 'alpha' && (maxStr !== undefined || calStr !== undefined)) {
+            throw new Error(`--decimate-compensate ${mode} takes no parameters (got '${value}')`);
+        }
+        return {
+            mode,
+            alphaMax: mode === 'alpha' ? parseNumber(maxStr ?? '4', 1) : 1,
+            massCal: mode === 'alpha' ? parseNumber(calStr ?? '1', 0) : 1
+        };
     };
 
     const parseVec = (value: string, count: number): number[] => {
@@ -533,6 +556,7 @@ const parseArguments = async () => {
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
         memoryBudgetBytes: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
+        compensation: parseCompensation(v['decimate-compensate']),
         lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -810,6 +834,9 @@ ACTIONS (executed in order; can be repeated)
                                               Lower memory, and better at depth on uniformly-sized
                                               Gaussians: uniform texture, single objects, snow.
         --decimate-adaptive <n|n%>          Simplify, allocating removal by local error (adaptive).
+        --decimate-compensate <mode>        Merged mass above unit alpha: none (default, discard),
+                                            alpha[:max[:massCal]] (keep as peak opacity >1),
+                                            scale (grow footprint to fit).
                                               Much better on mixed-scale content such as skies.
                                               Either must be the final action, with a .ply output
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
@@ -1284,12 +1311,14 @@ const main = async () => {
                         targetCount: keepCount,
                         createDevice: deviceCreator,
                         memoryBudgetBytes: options.memoryBudgetBytes,
+                        compensation: options.compensation,
                         spill
                     }) :
                     await decimateSource(combined, pool, {
                         targetCount: keepCount,
                         createDevice: deviceCreator,
                         memoryBudgetBytes: options.memoryBudgetBytes,
+                        compensation: options.compensation,
                         spill
                     });
             }

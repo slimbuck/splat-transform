@@ -440,6 +440,19 @@ const renderRasterPass = async (
     }
     rasterBar.end();
 
+    // PROTOTYPE (ST_FRAG_STATS): read before destroy, since the counter buffer
+    // dies with the rasterizer. Reported per megapixel as well as raw, so frames
+    // at different resolutions stay comparable.
+    const fragStats = await rasterizer.readFragStats();
+    if (fragStats) {
+        const mp = (width * height) / 1e6;
+        const fmt = (v: number) => `${(v / 1e6).toFixed(1)}M`;
+        process.stderr.write(`fragstats candidates=${fmt(fragStats.candidates)} ` +
+            `inFootprint=${fmt(fragStats.inFootprint)} blended=${fmt(fragStats.blended)} ` +
+            `perMP candidates=${fmt(fragStats.candidates / mp)} ` +
+            `inFootprint=${fmt(fragStats.inFootprint / mp)} blended=${fmt(fragStats.blended / mp)}\n`);
+    }
+
     rasterizer.destroy();
 
     return finalImage;

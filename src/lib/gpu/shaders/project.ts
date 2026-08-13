@@ -16,7 +16,9 @@
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
  * @returns WGSL source for the project compute shader.
  */
-const projectWgsl = (coeffsPerChannel: number) => /* wgsl */`
+const projectWgsl = (coeffsPerChannel: number, alphaMax: number = 1, plateau: number = 1) => /* wgsl */`
+const ALPHA_MAX: f32 = ${alphaMax.toFixed(6)};
+const PLATEAU: f32 = ${plateau.toFixed(6)};
 #include "uniformsStruct"
 #include "constants"
 
@@ -119,7 +121,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mid = 0.5 * (cov00 + cov11);
     let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - det));
     let lambdaMax = mid + disc;
-    let radiusRaw = SIGMA_CUTOFF * sqrt(lambdaMax);
+    // Geometric amplitude (may exceed 1 when ALPHA_MAX > 1). Kept separate
+    // from the modulation factors so the rasterizer can switch profile.
+    // Plateau shrink: D' = 1 + PLATEAU * (D - 1). Identity at D = 1, so
+    // sub-unity splats are untouched. Applied at RENDER time, once —
+    // scaling the stored mass instead compounds down a chained cascade
+    // (0.8 per level = 0.41 over four levels, measured -12.3 luma).
+    let ampRaw = ALPHA_MAX * (1.0 / (1.0 + exp(-opacity)));
+    var ampD = ampRaw;
+    if (ampRaw > 1.0) { ampD = 1.0 + PLATEAU * (ampRaw - 1.0); }
+    // Over-unity splats use Spark's smooth profile (see rasterize-binned):
+    // a Gaussian shifted outward by (D-1) with slope steepened by D. It
+    // reaches GAUSSIAN_FLOOR at (D-1) + SIGMA_CUTOFF/sqrt(D) sigma, which
+    // collapses to SIGMA_CUTOFF at D = 1, so the D <= 1 path is unchanged.
+    var extentSigma = SIGMA_CUTOFF;
+    if (ampD > 1.0) { extentSigma = (ampD - 1.0) + SIGMA_CUTOFF / sqrt(ampD); }
+    let radiusRaw = extentSigma * sqrt(lambdaMax);
 
     // Outlier-splat fade: huge splats (close-by mega-splats or pathological
     // training output) would otherwise project to a screen-spanning footprint
@@ -187,9 +204,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dofAlphaScale = 1.0;
 #endif
 
-    let alpha = (1.0 / (1.0 + exp(-opacity))) * radiusFade * dofAlphaScale;
+    let alpha = ampD * radiusFade * dofAlphaScale;
 
-    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
+    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, ampD);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);
     projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, 0.0);
 

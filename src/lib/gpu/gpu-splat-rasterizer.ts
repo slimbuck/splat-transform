@@ -52,6 +52,17 @@ const RUNNING_STATE_STRIDE_F32 = 4;
 const OUTPUT_STRIDE_U32 = 1;
 
 /**
+ * PROTOTYPE, env-gated (`ST_FRAG_STATS`): count rasterized fragments so the
+ * cost of a saturation strategy can be measured rather than estimated from
+ * footprint algebra. Off by default, and the counters compile out of the shader
+ * entirely, so the shipped path is unaffected.
+ */
+const FRAG_STATS = (Number(process.env.ST_FRAG_STATS ?? 0) || 0) !== 0;
+
+/** 3 counters as (lo, hi) u32 pairs — see `statAdd` in the rasterize shader. */
+const FRAG_STATS_WORDS = 6;
+
+/**
  * Configuration for a `GpuSplatRasterizer`. Fixed across the lifetime of
  * a render — `numSHBands` and the group tile dimensions determine GPU
  * buffer sizes and shader uniform layouts.
@@ -221,6 +232,12 @@ class GpuSplatRasterizer {
     private initTileOffsetsBgFormat: BindGroupFormat;
     private findBoundariesBgFormat: BindGroupFormat;
     private rasterizeBinnedBgFormat: BindGroupFormat;
+    /**
+     * PROTOTYPE: fragment counters. Lives on the instance, not in
+     * {@link PipelineBuffers}, so one render's totals accumulate across every
+     * group and chunk instead of resetting per group.
+     */
+    private fragStatsBuffer: StorageBuffer | null = null;
     private finalizeBgFormat: BindGroupFormat;
     private buffers: PipelineBuffers;
     /**
@@ -260,8 +277,28 @@ class GpuSplatRasterizer {
         const numTiles = options.groupTilesX * options.groupTilesY;
         // Round up to multiple of 4 (radix sort uses 4-bit passes). Min 4
         // because ComputeRadixSort requires numBits ≥ 4. Max 32 (u32 key).
-        const tileBits = Math.max(4, Math.min(32, Math.ceil(Math.log2(Math.max(2, numTiles)) / 4) * 4));
-        this.sortKeyBits = tileBits;
+        // Round up to whole 4-bit radix passes, then to an ODD pass count.
+        //
+        // ComputeRadixSort picks its ping-pong output buffer per getter, and
+        // the two getters disagree on parity: `sortedIndices` returns
+        // `_values1` for an odd pass count, while `sortedKeys` returns
+        // `_keys1` for an EVEN one. We call sortIndirect with
+        // skipLastPassKeyWrite defaulted to false, so keys and values are
+        // written on every pass and both must land in the same ping-pong
+        // stage — which means only an odd pass count yields a mutually
+        // consistent (keys, values) pair. With an even count, findBoundaries
+        // reads keys from one stage while rasterize reads values from the
+        // other, so tile slices point at unrelated splats and almost every
+        // tile resolves empty (near-black image).
+        //
+        // This bit only became reachable once renders exceeded 4096 tiles
+        // (~1 MP): at or below that, numTiles needs <= 12 bits = 3 passes,
+        // already odd. 4160 tiles needs 13 -> 4 passes, which tripped it.
+        // Rounding up costs at most one extra 4-bit pass.
+        const minBits = Math.ceil(Math.log2(Math.max(2, numTiles)));
+        let passes = Math.max(1, Math.ceil(minBits / 4));
+        if (passes % 2 === 0) passes += 1;
+        this.sortKeyBits = Math.min(32, passes * 4);
 
         const coeffs = numSHCoeffsPerChannel(options.numSHBands);
         this.inputStride = 14 + 3 * coeffs;
@@ -307,7 +344,10 @@ class GpuSplatRasterizer {
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('runningState', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('tileOffsets', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('sortedSplatIndices', SHADERSTAGE_COMPUTE, true)
+            new BindStorageBufferFormat('sortedSplatIndices', SHADERSTAGE_COMPUTE, true),
+            // PROTOTYPE (ST_FRAG_STATS): appended, so binding indices 0..4 are
+            // unchanged and the shipped shader is untouched when it is off.
+            ...(FRAG_STATS ? [new BindStorageBufferFormat('fragStats', SHADERSTAGE_COMPUTE)] : [])
         ]);
         this.finalizeBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -356,6 +396,13 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 1) sharedCdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
+        if (FRAG_STATS) sharedCdefines.set('FRAG_STATS', '');
+        if (FRAG_STATS) {
+            // No explicit zeroing: WebGPU guarantees a freshly created buffer
+            // reads as zero, and one buffer per rasterizer means one render's
+            // counters start clean.
+            this.fragStatsBuffer = new StorageBuffer(device, FRAG_STATS_WORDS * 4, BUFFERUSAGE_COPY_SRC);
+        }
 
         const mkShader = (
             name: string,
@@ -394,7 +441,7 @@ class GpuSplatRasterizer {
             new UniformFormat('boundariesSlotBase', UNIFORMTYPE_UINT)
         ];
 
-        this.projectShader = mkShader('splat-project', projectWgsl(coeffs), this.projectBgFormat);
+        this.projectShader = mkShader('splat-project', projectWgsl(coeffs, Math.max(1, Number(process.env.ST_ALPHA_MAX ?? 1) || 1), Number(process.env.ST_PLATEAU ?? 1) || 1), this.projectBgFormat);
         this.prefixSumShader = mkShader('splat-tilebin-prefix-sum', prefixSumWgsl(scanPerThread), this.prefixSumBgFormat);
         this.emitPairsShader = mkShader('splat-tilebin-emit-pairs', tileBinEmitPairsWgsl(), this.emitPairsBgFormat);
         this.prepareIndirectShader = mkShader('splat-tilebin-prepare-indirect', prepareIndirectWgsl(), this.prepareIndirectBgFormat, prepareIndirectUniforms);
@@ -470,6 +517,7 @@ class GpuSplatRasterizer {
         rasterizeBinnedCompute.setParameter('projected', projBuffer);
         rasterizeBinnedCompute.setParameter('runningState', runningStateBuffer);
         rasterizeBinnedCompute.setParameter('tileOffsets', tileOffsetsBuffer);
+        if (this.fragStatsBuffer) rasterizeBinnedCompute.setParameter('fragStats', this.fragStatsBuffer);
         // `sortedSplatIndices` is bound per-chunk inside `dispatchChunk`,
         // pointing at the radix sort's `sortedIndices` output buffer.
 
@@ -776,6 +824,22 @@ class GpuSplatRasterizer {
         const activePixelH = this.activeTilesY * TILE_SIZE;
         const groupOutputBytes = activePixelW * activePixelH * 4;
         return b.outputBuffer.read(0, groupOutputBytes, null, true) as Promise<Uint8Array>;
+    }
+
+    /**
+     * PROTOTYPE (`ST_FRAG_STATS`): totals accumulated since construction —
+     * candidates considered, fragments inside a footprint, fragments blended.
+     * Null when the counters are disabled. Each is a (lo, hi) u32 pair
+     * recombined here, so counts past 2^32 stay exact.
+     *
+     * @returns Fragment totals for every group rendered so far, or null.
+     */
+    async readFragStats(): Promise<{ candidates: number; inFootprint: number; blended: number } | null> {
+        if (!this.fragStatsBuffer) return null;
+        const bytes = await (this.fragStatsBuffer.read(0, FRAG_STATS_WORDS * 4, null, true) as Promise<Uint8Array>);
+        const w = new Uint32Array(bytes.buffer, bytes.byteOffset, FRAG_STATS_WORDS);
+        const at = (slot: number) => w[slot * 2] + w[slot * 2 + 1] * 2 ** 32;
+        return { candidates: at(0), inFootprint: at(1), blended: at(2) };
     }
 
     /**

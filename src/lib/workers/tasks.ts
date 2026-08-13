@@ -1,6 +1,6 @@
 import type { TypedArray } from '../data-table/data-table';
 import { knnForestQuery, type ForestPart } from '../decimate/knn-core';
-import { mergeGroup, createMergeScratch, splatMass } from '../decimate/moment-match';
+import { mergeGroup, createMergeScratch, splatMass, setCompensation, type Compensation } from '../decimate/moment-match';
 import { knnQueryBlock } from '../decimate-uniform/knn-core';
 import { buildFlatKdTree, type FlatKdTree } from '../spatial/kd-tree';
 import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
@@ -143,9 +143,14 @@ const taskHandlers = {
         sizes: Uint32Array,
         colorDim: number,
         other?: Uint32Array,
-        otherDim?: number
+        otherDim?: number,
+        compensation?: Compensation
     }): TaskOutput<{ pos: Float32Array, geo: Float32Array, color: Float32Array, other?: Uint32Array }> => {
         const { sizes, colorDim } = args;
+        // Set per task rather than per process: workers are pooled and may serve
+        // several outputs in one run, so inheriting a previous task's mode would
+        // silently mis-merge. Cheap and idempotent.
+        setCompensation(args.compensation);
         const g = sizes.length;
         const otherDim = args.otherDim ?? 0;
         const view = { pos: args.pos, geo: args.geo, color: args.color, colorDim };

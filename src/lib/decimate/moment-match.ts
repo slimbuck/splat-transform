@@ -15,6 +15,121 @@ const LOG2PI = Math.log(2 * Math.PI);
 /** Covariance diagonal regularizer, matching legacy EPS_COV. */
 const EPS_COV = 1e-8;
 
+/**
+ * What to do with merged mass that a unit-alpha Gaussian cannot carry. A merge
+ * of n splats owes the summed `alpha * area` of all of them; when the merged
+ * footprint is too small to carry it at `alpha <= 1`, the excess has to go
+ * somewhere, and this is that choice. Orthogonal to how the group was chosen,
+ * so it applies identically to every allocator (uniform, adaptive, voxel).
+ *
+ * - `none`   — discard it. `min(1, W/area)`. The shipped behaviour: cheapest,
+ *              and the cause of the darkening and gaps at coarse levels.
+ * - `alpha`  — raise the Gaussian's peak above 1 and let the renderer draw the
+ *              over-unity profile. Costs FEWER fragments than `none`, because a
+ *              more opaque splat terminates rays sooner.
+ * - `scale`  — grow the footprint until the mass fits at `alpha <= 1`. Needs no
+ *              format or renderer change, but costs 2-3x the fragments and
+ *              softens detail, because coverage is bought with geometry.
+ *
+ * `scale` and `none` are self-contained: any reader renders them correctly.
+ * `alpha` is not — a consumer assuming 0..1 draws the scene `alphaMax` times too
+ * transparent with no error, so it needs a format marker to be safe. The
+ * encoding here is a range reinterpretation (`alpha = alphaMax * sigmoid`),
+ * which is NOT what Spark reads; matching Spark's `[1,2]` half-float mapping is
+ * deferred follow-up work.
+ */
+type CompensationMode = 'none' | 'alpha' | 'scale';
+
+type Compensation = {
+    mode: CompensationMode;
+    /**
+     * Opacity range when `mode` is `alpha`; 1 elsewhere. The stored value stays
+     * a plain logit and only the range it maps onto changes, so at 1 every path
+     * is bit-identical to the shipped behaviour.
+     */
+    alphaMax: number;
+    /**
+     * Scalar on the mass target before solving for the profile's shape
+     * parameter; 1 = exact 2D-integral match. Integral match is not the right
+     * invariant under alpha compositing — a wide opaque plateau occludes more
+     * completely than the same mass spread softly, so front-to-back
+     * accumulation saturates early and the frame brightens. Below 1 shrinks the
+     * plateau to compensate. Only meaningful when `mode` is `alpha`.
+     */
+    massCal: number;
+};
+
+const DEFAULT_COMPENSATION: Compensation = { mode: 'none', alphaMax: 1, massCal: 1 };
+
+/**
+ * Module-level rather than a parameter because the mass convention has to be
+ * consistent across every consumer in a run — {@link alphaDecode} is reached
+ * from the edge cost and the priority queue as well as the merge site, and an
+ * inconsistency between "what a merge produces" and "what the cost predicts"
+ * would be silent. Set once per worker task (cheap, idempotent) rather than
+ * imported, keeping this module free of engine and option types.
+ */
+let active: Compensation = DEFAULT_COMPENSATION;
+
+const setCompensation = (c?: Partial<Compensation>): void => {
+    active = c ? { ...DEFAULT_COMPENSATION, ...c } : DEFAULT_COMPENSATION;
+    if (active.mode !== 'alpha') active.alphaMax = 1;
+    active.alphaMax = Math.max(1, active.alphaMax);
+};
+
+const getCompensation = (): Compensation => active;
+
+/**
+ * Integrated mass of the renderer's over-unity profile, in units where an
+ * unclamped amplitude-A Gaussian carries A. For the smooth (Spark) profile
+ * `exp(-D/2 * (max(0, r - (D-1)))^2)`:
+ *
+ *   I(D) = (D-1)^2/2 + 1/D + (D-1)/2 * sqrt(2*pi/D)
+ *
+ * I(1) = 1 exactly, and I grows ~D^2/2 — so unlike the clamped form
+ * `min(1, A*exp(-r^2/2))`, whose mass ceiling grows only logarithmically
+ * (2.39 at A = 4, 2.79 at A = 6), this profile can actually carry the mass a
+ * heavy merge needs.
+ */
+const profileMass = (D: number): number => {
+    if (D <= 1) return D;
+    const p = D - 1;
+    return (p * p) / 2 + 1 / D + (p / 2) * Math.sqrt((2 * Math.PI) / D);
+};
+
+/**
+ * Inverse of {@link profileMass}: the shape parameter D whose profile carries
+ * mass `m`. Bisection — monotone, a handful of iterations, and only ever runs
+ * on merges that exceed unit mass.
+ */
+const profileParamForMass = (m: number): number => {
+    if (m <= 1) return m;
+    let lo = 1, hi = 2;
+    while (profileMass(hi) < m && hi < 1e6) hi *= 2;
+    for (let i = 0; i < 40; i++) {
+        const mid = 0.5 * (lo + hi);
+        if (profileMass(mid) < m) lo = mid; else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+};
+
+/**
+ * Stored logit -> the MASS the splat carries (not the raw shape parameter).
+ * Internal consumers — merge weights, edge costs — want mass, so an over-unity
+ * splat must report I(D), otherwise a merged splat's weight silently
+ * under-counts the energy it actually emits.
+ */
+const alphaDecode = (stored: number) => profileMass(active.alphaMax * sigmoid(stored));
+
+/**
+ * Mass -> stored logit. Solves for the shape parameter first, so what lands in
+ * the file is D (what the renderer needs), while callers keep thinking in mass.
+ */
+const alphaEncode = (mass: number) => {
+    const D = profileParamForMass(mass * active.massCal);
+    return logit(Math.max(0, Math.min(1, D / active.alphaMax)));
+};
+
 // ---------- sigmoid / logit ----------
 
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
@@ -280,7 +395,7 @@ const splatMass = (geo: Float32Array, i: number): number => {
     const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
     const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
     const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
-    return sigmoid(geo[i8 + 7]) * ellipsoidArea(sx, sy, sz) + 1e-30;
+    return alphaDecode(geo[i8 + 7]) * ellipsoidArea(sx, sy, sz) + 1e-30;
 };
 
 /**
@@ -395,12 +510,37 @@ const mergeGroup = (
     const ev1 = Math.max(eigA[3 * o1 + o1], 1e-18);
     const ev2 = Math.max(eigA[3 * o2 + o2], 1e-18);
 
-    const s0 = Math.sqrt(ev0);
-    const s1 = Math.sqrt(ev1);
-    const s2 = Math.sqrt(ev2);
+    let s0 = Math.sqrt(ev0);
+    let s1 = Math.sqrt(ev1);
+    let s2 = Math.sqrt(ev2);
 
-    // Mass-conserving opacity, capped at 1 (no scale inflation).
-    const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
+    // Compensation mode `scale`: grow the footprint until the owed mass fits at
+    // the profile's ceiling, instead of letting the clamp below discard it.
+    //
+    // `ellipsoidArea` is homogeneous of degree 2 in the scales, so the factor is
+    // exact rather than iterative: area(f*s) = f^2 * area(s). Scales grow
+    // isotropically, preserving shape and orientation — which is precisely what
+    // trades blur for coverage, since the gap is filled with geometry.
+    //
+    // Composes with `alphaMax` rather than replacing it: at the default 1 the
+    // ceiling is 1 and this is pure inflation, while a higher `alphaMax` leaves
+    // only the residual the peak cannot carry for the footprint to absorb.
+    if (active.mode === 'scale') {
+        const ceiling = profileMass(active.alphaMax);
+        const area = Math.max(ellipsoidArea(s0, s1, s2), 1e-30);
+        const needed = W / ceiling;
+        if (needed > area) {
+            const f = Math.sqrt(needed / area);
+            s0 *= f; s1 *= f; s2 *= f;
+        }
+    }
+
+    // Mass-conserving opacity, capped at the profile ceiling. Under `none` the
+    // ceiling is 1 and this clamp discards mass whenever the merged footprint is
+    // too small to carry it; splats that hit it land at the logit saturation
+    // ceiling in the output, which is how the discarded-mass rate is measured
+    // offline. Under `alpha` the ceiling rises and the excess is kept as peak.
+    const alphaM = Math.min(profileMass(active.alphaMax), W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     const Rm = scratch.rM;
     Rm[0] = vecs[o0]; Rm[1] = vecs[o1]; Rm[2] = vecs[o2];
@@ -415,7 +555,7 @@ const mergeGroup = (
     out.geo[4] = Math.log(s0);
     out.geo[5] = Math.log(s1);
     out.geo[6] = Math.log(s2);
-    out.geo[7] = logit(Math.max(0, Math.min(1, alphaM)));
+    out.geo[7] = alphaEncode(alphaM);
 
     // Color: weight-normalized (area·α weighted) average.
     for (let c = 0; c < colorDim; c++) {
@@ -430,6 +570,11 @@ const mergeGroup = (
 export {
     EPS_COV,
     LOG2PI,
+    setCompensation,
+    getCompensation,
+    DEFAULT_COMPENSATION,
+    alphaDecode,
+    alphaEncode,
     sigmoid,
     logit,
     logAddExp,
@@ -446,5 +591,7 @@ export {
     createMergeScratch,
     type SplatView,
     type MergedOut,
-    type MergeScratch
+    type MergeScratch,
+    type Compensation,
+    type CompensationMode
 };

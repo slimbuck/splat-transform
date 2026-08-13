@@ -52,6 +52,12 @@ export type { DecimateOptions, DecimateSpill } from './decimate-uniform';
 export { decimateSourceAdaptive } from './decimate';
 export type { DecimateAdaptiveOptions, DecimateAdaptiveSpill } from './decimate';
 
+// Merged-mass compensation, shared by every decimator: discard the excess
+// (`none`), keep it as peak opacity above 1 (`alpha`), or grow the footprint to
+// fit it (`scale`). Orthogonal to how groups are chosen.
+export { DEFAULT_COMPENSATION, setCompensation, getCompensation } from './decimate';
+export type { Compensation, CompensationMode } from './decimate';
+
 // Statistics
 export { computeStats } from './stats';
 export type { LodStats, LodStatsData, SourceStats } from './stats';

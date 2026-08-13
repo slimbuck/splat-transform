@@ -2,6 +2,7 @@ import { type ChunkPayload } from './block-producer';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
 import { type SelectionResult } from './select';
+import { type Compensation } from '../decimate/moment-match';
 import { WorkerQueue } from '../workers';
 
 /** Context for the merge stream: the priority context plus the selection. */
@@ -9,6 +10,8 @@ type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'ord
     selection: SelectionResult;
     /** When provided (sized to the output count), filled with output positions in emission order — the next generation's resident positions. */
     nextPositions?: ResidentPositions;
+    /** How merged mass that exceeds unit alpha is handled; default discards it. */
+    compensation?: Compensation;
 };
 
 /**
@@ -122,7 +125,8 @@ async function *mergeStream(
                 sizes,
                 colorDim,
                 other: mOther,
-                otherDim
+                otherDim,
+                compensation: ctx.compensation
             }, transfer);
             mergedPos = merged.pos;
             mergedGeo = merged.geo;

@@ -7,7 +7,8 @@ import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED, type Block
 import { KNN_SENTINEL } from './knn-core';
 import { type BlockRange, type ResidentPositions } from './partition';
 import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
-import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea, type SplatView } from '../decimate/moment-match';
+import {
+    alphaDecode, createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea, type SplatView } from '../decimate/moment-match';
 import { WorkerQueue } from '../workers';
 
 /** Halo radius multiplier on the density-estimated k-NN radius. */
@@ -161,7 +162,7 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
     for (let i = 0; i < n; i++) {
         const i8 = i * 8;
         const o = i * 8;
-        const linAlpha = sigmoid(geo[i8 + 7]);
+        const linAlpha = alphaDecode(geo[i8 + 7]);
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
