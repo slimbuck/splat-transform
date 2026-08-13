@@ -170,8 +170,9 @@ async function *voxelMergeStream(
     const scratch = createMergeScratch();
     let memberRows = new Int32Array(64);
 
-    // The merge honours the compensation mode through module state, which the
-    // worker path sets per task; here mergeGroup runs inline, so set it once.
+    // Re-assert it here too: this generator runs lazily, after the caller has
+    // pulled the first output chunk, so unrelated work could have touched the
+    // shared state in between.
     setCompensation(compensation);
 
     // Merge groups `[from, to)` into output rows starting at `rowBase`.
@@ -326,6 +327,14 @@ const decimateSourceVoxel = async (
     logger.info(
         `${fmtCount(n)} → ${fmtCount(targetCount)} · ${fmtBytes(n * SELECTION_BYTES)} resident`
     );
+
+    // Set the compensation mode BEFORE anything reads it. `leafAggregates` decodes
+    // opacity through `alphaDecode`, and the select kernel bakes `alphaMax` into
+    // its WGSL at construction — both read this module state, so setting it only
+    // at the merge (as the worker-based decimators do, per task) would leave
+    // selection on one convention and the merge on another. Silent, and exactly
+    // what a single shared setting is supposed to prevent.
+    setCompensation(opts.compensation);
 
     const view = await readSelectionView(src, pool);
     const { min, ext } = boundsOf(view.pos, n);
