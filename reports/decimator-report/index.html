@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Splat decimation: decimator × compensation</title>
+<style>
+:root { --bg:#14161a; --panel:#1c1f25; --line:#2c313a; --fg:#e6e8ec; --dim:#9aa3af; --acc:#7cc4ff; --win:#7ee08a; --warn:#f0c674; }
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif }
+header, main { max-width:1600px; margin:0 auto; padding:0 24px }
+header { padding-top:32px }
+h1 { font-size:26px; margin:0 0 4px }
+h2 { font-size:21px; margin:40px 0 4px; padding-top:16px; border-top:1px solid var(--line) }
+h3 { font-size:16px; margin:28px 0 8px }
+h4 { font-size:13px; margin:0 0 6px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em }
+p { margin:8px 0 }
+code { background:#242832; padding:1px 5px; border-radius:3px; font-size:12.5px }
+.hint { color:var(--dim); font-weight:400; font-size:11px }
+.meta { color:var(--dim) }
+.controls { position:sticky; top:0; z-index:20; background:rgba(20,22,26,.94); backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line); padding:10px 24px; margin-bottom:8px; display:flex; gap:18px; align-items:center; flex-wrap:wrap }
+.controls label { color:var(--dim) }
+.controls a { color:var(--acc); text-decoration:none; margin-right:12px }
+input[type=range] { width:220px; vertical-align:middle }
+.row3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px }
+.gridrow { margin:14px 0 }
+.tile { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:6px; overflow:hidden; cursor:pointer; outline:none }
+.tile:focus { border-color:var(--acc) }
+.tile img { width:100%; display:block; background:#000 }
+.tile figcaption { padding:6px 8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px }
+.vlabel { font-weight:600 }
+.badge { color:var(--dim); font-variant-numeric:tabular-nums }
+.tag { font-size:10px; padding:1px 6px; border-radius:10px; border:1px solid }
+.tag.win { color:var(--win); border-color:#2f5b39 }
+.tag.warn { color:var(--warn); border-color:#5b4a2f }
+.tile.empty { display:flex; align-items:center; justify-content:center; color:#5b6472; font-size:12px; min-height:80px; cursor:default }
+.refbar { display:grid; grid-template-columns:1fr 2fr; gap:14px; align-items:start; margin:12px 0 4px }
+.refnote { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px 14px }
+table.metrics { border-collapse:collapse; width:100%; margin:14px 0 6px; font-size:12.5px }
+table.metrics th, table.metrics td { border-bottom:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:bottom }
+table.metrics th { color:var(--dim); font-weight:600; font-size:11.5px }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums }
+td.best { color:var(--win); font-weight:700 }
+tr.hl { background:#1a2029 }
+.callout { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--warn); border-radius:0 6px 6px 0; padding:12px 16px; margin:16px 0 }
+.callout.info { border-left-color:var(--acc) }
+#lb { position:fixed; inset:0; background:rgba(8,9,11,.96); z-index:100; display:none; flex-direction:column }
+#lb.open { display:flex }
+#lbhead { padding:12px 20px; display:flex; gap:16px; align-items:center; border-bottom:1px solid var(--line) }
+#lbimg { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px }
+#lbimg img { max-width:100%; max-height:100%; image-rendering:pixelated; background:#000 }
+#lb button { background:#242832; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:5px 12px; cursor:pointer; font:inherit; font-size:12px }
+#lb button.on { border-color:var(--acc); color:var(--acc) }
+kbd { background:#242832; border:1px solid var(--line); border-bottom-width:2px; border-radius:3px; padding:0 5px; font-size:11px }
+ul { margin:8px 0; padding-left:22px }
+li { margin:4px 0 }
+footer { color:var(--dim); padding:32px 24px 60px; max-width:1600px; margin:0 auto; font-size:12px }
+</style></head><body>
+<header>
+<h1>Splat decimation: decimator × compensation</h1>
+<p class="meta">Coarsest LOD on 5 problem scenes · 8 azimuths per cell · 960x540 · scored against the undecimated source</p>
+</header>
+<div class="controls">
+  <span><label>azimuth</label> <input type="range" id="az" min="0" max="7" value="0" step="1"> <span id="azv">0 / 8</span></span>
+  <span><label><input type="checkbox" id="flip"> show original everywhere</label></span>
+  <span><a href="#bad-spots">bad-spots</a><a href="#bad-cloud">bad-cloud</a><a href="#bad-sky">bad-sky</a><a href="#bad-snow-2">bad-snow-2</a><a href="#bad-snow">bad-snow</a><a href="#numbers">numbers</a><a href="#findings">findings</a><a href="#options">options</a><a href="#method">method</a></span>
+</div>
+<main>
+
+<h3>What this compares</h3>
+<p>Three in-tree decimators, each at all three merged-mass compensation modes, plus wl's own <code>simplify</code> as an external
+reference point. Every cell reduces the same scene to the same splat count at the same LOD, so the only variables are
+<em>which splats survive</em> and <em>what happens to the mass of the ones that don't</em>.</p>
+<ul>
+<li><strong>none</strong> — merged mass above unit alpha is discarded. Shipping default.</li>
+<li><strong>alpha</strong> — the excess is kept as over-unity peak opacity, rendered as a saturated plateau.</li>
+<li><strong>scale</strong> — the footprint is inflated until the mass fits under unit alpha.</li>
+</ul>
+
+<h3>The numbers behind the images</h3>
+<p>Mean rank is the column to read: PSNR and gap have very different dynamic ranges per scene, so averaging raw values lets one
+scene dominate. Rank is 1 = best of 10. <strong>gap</strong> is the
+percentage of pixels more than 20 luma off the reference, split into darker (holes) and brighter (over-bright). PSNR and gap
+disagree by design — a diffuse haze costs a lot of MSE but is barely visible, while a few hard black holes cost little MSE and
+are the first thing you notice. Where they disagree, the images decide.</p>
+
+<table class="metrics">
+<thead><tr><th>decimator</th><th>compensation</th><th>PSNR dB<br><span class="hint">mean, higher better</span></th>
+<th>PSNR rank<br><span class="hint">mean of 1..N</span></th><th>dark&gt;20 %</th><th>bright&gt;20 %</th>
+<th>gap %<br><span class="hint">dark+bright, lower better</span></th><th>gap rank</th></tr></thead>
+<tbody>
+<tr>
+<td>uniform</td><td><code>none</code></td>
+<td class="num">19.69</td>
+<td class="num">7.8</td>
+<td class="num">26.37</td><td class="num">8.21</td>
+<td class="num">34.58</td>
+<td class="num">8.2</td></tr>
+<tr>
+<td>uniform</td><td><code>alpha</code></td>
+<td class="num">22.52</td>
+<td class="num">4.6</td>
+<td class="num">12.64</td><td class="num">8.79</td>
+<td class="num">21.43</td>
+<td class="num">4.2</td></tr>
+<tr>
+<td>uniform</td><td><code>scale</code></td>
+<td class="num">20.00</td>
+<td class="num">7.8</td>
+<td class="num">17.30</td><td class="num">13.66</td>
+<td class="num">30.96</td>
+<td class="num">8.0</td></tr>
+<tr>
+<td>adaptive</td><td><code>none</code></td>
+<td class="num">23.89</td>
+<td class="num">5.2</td>
+<td class="num">11.10</td><td class="num">9.09</td>
+<td class="num">20.19</td>
+<td class="num">5.0</td></tr>
+<tr>
+<td>adaptive</td><td><code>alpha</code></td>
+<td class="num">24.29</td>
+<td class="num">3.8</td>
+<td class="num">10.89</td><td class="num">6.60</td>
+<td class="num">17.48</td>
+<td class="num best">3.4</td></tr>
+<tr>
+<td>adaptive</td><td><code>scale</code></td>
+<td class="num">23.16</td>
+<td class="num">5.8</td>
+<td class="num">15.74</td><td class="num">7.03</td>
+<td class="num">22.77</td>
+<td class="num">5.8</td></tr>
+<tr>
+<td>voxel</td><td><code>none</code></td>
+<td class="num">23.64</td>
+<td class="num">5.2</td>
+<td class="num">15.27</td><td class="num">5.06</td>
+<td class="num">20.33</td>
+<td class="num">5.8</td></tr>
+<tr>
+<td>voxel</td><td><code>alpha</code></td>
+<td class="num">24.27</td>
+<td class="num best">3.4</td>
+<td class="num">12.51</td><td class="num">5.04</td>
+<td class="num">17.55</td>
+<td class="num">3.6</td></tr>
+<tr>
+<td>voxel</td><td><code>scale</code></td>
+<td class="num">23.08</td>
+<td class="num">6.6</td>
+<td class="num">14.53</td><td class="num">6.67</td>
+<td class="num">21.20</td>
+<td class="num">6.2</td></tr>
+<tr>
+<td>wl</td><td><code>default</code></td>
+<td class="num">22.51</td>
+<td class="num">4.8</td>
+<td class="num">13.65</td><td class="num">7.50</td>
+<td class="num">21.15</td>
+<td class="num">4.8</td></tr>
+</tbody></table>
+<p class="meta">Headline: every <code>alpha</code> variant outranks every <code>none</code> variant, and all three beat wl.
+Compensation matters more than the choice of decimator. Full per-scene tables are <a href="#numbers">below the images</a>.</p>
+
+<h2 id="images">Images</h2>
+<p>All five scenes, every decimator × compensation cell, at the coarsest LOD.</p>
+
+<section class="scene" id="bad-spots">
+<h2>bad-spots</h2>
+<p class="meta">29,567,319 splats → 923,979 at LOD 5 (3.13% kept)</p>
+<div class="refbar">
+  <figure class="tile" data-scene="bad-spots" data-variant="ref" tabindex="0">
+  <img data-base="img/bad-spots-ref" data-ref="img/bad-spots-ref" src="img/bad-spots-ref-0.webp" alt="original (reference)" loading="lazy">
+  <figcaption><span class="vlabel">original (reference)</span><span class="badge"></span></figcaption>
+</figure>
+  <div class="refnote"><h4>How to read this</h4>
+  <p><strong>Hover any tile</strong> to flip it to the original at the same camera. <strong>Click</strong> for a full-size A/B view,
+  where <kbd>space</kbd> holds the original and <kbd>←</kbd><kbd>→</kbd> steps through variants.</p>
+  <p>Badges are mean PSNR and mean gap over 8 azimuths. The slider at the top rotates every image at once.</p></div>
+</div>
+<div class="gridrow"><h4>uniform</h4><div class="row3"><figure class="tile" data-scene="bad-spots" data-variant="uni-none" tabindex="0">
+  <img data-base="img/bad-spots-uni-none" data-ref="img/bad-spots-ref" src="img/bad-spots-uni-none-0.webp" alt="uniform / none" loading="lazy">
+  <figcaption><span class="vlabel">uniform / none</span><span class="badge">18.72 dB · 46.43%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-spots" data-variant="uni-alpha" tabindex="0">
+  <img data-base="img/bad-spots-uni-alpha" data-ref="img/bad-spots-ref" src="img/bad-spots-uni-alpha-0.webp" alt="uniform / alpha" loading="lazy">
+  <figcaption><span class="vlabel">uniform / alpha</span><span class="badge">19.84 dB · 31.60%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-spots" data-variant="uni-scale" tabindex="0">
+  <img data-base="img/bad-spots-uni-scale" data-ref="img/bad-spots-ref" src="img/bad-spots-uni-scale-0.webp" alt="uniform / scale" loading="lazy">
+  <figcaption><span class="vlabel">uniform / scale</span><span class="badge">17.57 dB · 44.13%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>adaptive</h4><div class="row3"><figure class="tile" data-scene="bad-spots" data-variant="ada-none" tabindex="0">
+  <img data-base="img/bad-spots-ada-none" data-ref="img/bad-spots-ref" src="img/bad-spots-ada-none-0.webp" alt="adaptive / none" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / none</span><span class="badge">20.58 dB · 28.99%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-spots" data-variant="ada-alpha" tabindex="0">
+  <img data-base="img/bad-spots-ada-alpha" data-ref="img/bad-spots-ref" src="img/bad-spots-ada-alpha-0.webp" alt="adaptive / alpha" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / alpha</span><span class="badge">21.35 dB · 21.12%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-spots" data-variant="ada-scale" tabindex="0">
+  <img data-base="img/bad-spots-ada-scale" data-ref="img/bad-spots-ref" src="img/bad-spots-ada-scale-0.webp" alt="adaptive / scale" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / scale</span><span class="badge">18.81 dB · 40.27%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>voxel</h4><div class="row3"><figure class="tile" data-scene="bad-spots" data-variant="vox-none" tabindex="0">
+  <img data-base="img/bad-spots-vox-none" data-ref="img/bad-spots-ref" src="img/bad-spots-vox-none-0.webp" alt="voxel / none" loading="lazy">
+  <figcaption><span class="vlabel">voxel / none</span><span class="badge">22.08 dB · 20.85%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-spots" data-variant="vox-alpha" tabindex="0">
+  <img data-base="img/bad-spots-vox-alpha" data-ref="img/bad-spots-ref" src="img/bad-spots-vox-alpha-0.webp" alt="voxel / alpha" loading="lazy">
+  <figcaption><span class="vlabel">voxel / alpha</span><span class="badge">23.51 dB · 13.89%</span><span class="tag win">best PSNR</span><span class="tag win">best gap</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-spots" data-variant="vox-scale" tabindex="0">
+  <img data-base="img/bad-spots-vox-scale" data-ref="img/bad-spots-ref" src="img/bad-spots-vox-scale-0.webp" alt="voxel / scale" loading="lazy">
+  <figcaption><span class="vlabel">voxel / scale</span><span class="badge">21.03 dB · 23.18%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>wl</h4><div class="row3"><figure class="tile" data-scene="bad-spots" data-variant="wl-default" tabindex="0">
+  <img data-base="img/bad-spots-wl-default" data-ref="img/bad-spots-ref" src="img/bad-spots-wl-default-0.webp" alt="wl / default" loading="lazy">
+  <figcaption><span class="vlabel">wl / default</span><span class="badge">21.81 dB · 20.85%</span></figcaption>
+</figure><div class="tile empty">no alpha analogue</div><div class="tile empty">boost 0.75 ≈ scale</div></div></div>
+</section>
+<section class="scene" id="bad-cloud">
+<h2>bad-cloud</h2>
+<p class="meta">10,000,000 splats → 625,000 at LOD 4 (6.25% kept)</p>
+<div class="refbar">
+  <figure class="tile" data-scene="bad-cloud" data-variant="ref" tabindex="0">
+  <img data-base="img/bad-cloud-ref" data-ref="img/bad-cloud-ref" src="img/bad-cloud-ref-0.webp" alt="original (reference)" loading="lazy">
+  <figcaption><span class="vlabel">original (reference)</span><span class="badge"></span></figcaption>
+</figure>
+  <div class="refnote"><h4>How to read this</h4>
+  <p><strong>Hover any tile</strong> to flip it to the original at the same camera. <strong>Click</strong> for a full-size A/B view,
+  where <kbd>space</kbd> holds the original and <kbd>←</kbd><kbd>→</kbd> steps through variants.</p>
+  <p>Badges are mean PSNR and mean gap over 8 azimuths. The slider at the top rotates every image at once.</p></div>
+</div>
+<div class="gridrow"><h4>uniform</h4><div class="row3"><figure class="tile" data-scene="bad-cloud" data-variant="uni-none" tabindex="0">
+  <img data-base="img/bad-cloud-uni-none" data-ref="img/bad-cloud-ref" src="img/bad-cloud-uni-none-0.webp" alt="uniform / none" loading="lazy">
+  <figcaption><span class="vlabel">uniform / none</span><span class="badge">20.73 dB · 27.81%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-cloud" data-variant="uni-alpha" tabindex="0">
+  <img data-base="img/bad-cloud-uni-alpha" data-ref="img/bad-cloud-ref" src="img/bad-cloud-uni-alpha-0.webp" alt="uniform / alpha" loading="lazy">
+  <figcaption><span class="vlabel">uniform / alpha</span><span class="badge">22.51 dB · 17.20%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-cloud" data-variant="uni-scale" tabindex="0">
+  <img data-base="img/bad-cloud-uni-scale" data-ref="img/bad-cloud-ref" src="img/bad-cloud-uni-scale-0.webp" alt="uniform / scale" loading="lazy">
+  <figcaption><span class="vlabel">uniform / scale</span><span class="badge">21.96 dB · 19.40%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>adaptive</h4><div class="row3"><figure class="tile" data-scene="bad-cloud" data-variant="ada-none" tabindex="0">
+  <img data-base="img/bad-cloud-ada-none" data-ref="img/bad-cloud-ref" src="img/bad-cloud-ada-none-0.webp" alt="adaptive / none" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / none</span><span class="badge">21.06 dB · 18.75%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-cloud" data-variant="ada-alpha" tabindex="0">
+  <img data-base="img/bad-cloud-ada-alpha" data-ref="img/bad-cloud-ref" src="img/bad-cloud-ada-alpha-0.webp" alt="adaptive / alpha" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / alpha</span><span class="badge">21.80 dB · 17.66%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-cloud" data-variant="ada-scale" tabindex="0">
+  <img data-base="img/bad-cloud-ada-scale" data-ref="img/bad-cloud-ref" src="img/bad-cloud-ada-scale-0.webp" alt="adaptive / scale" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / scale</span><span class="badge">21.58 dB · 18.83%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>voxel</h4><div class="row3"><figure class="tile" data-scene="bad-cloud" data-variant="vox-none" tabindex="0">
+  <img data-base="img/bad-cloud-vox-none" data-ref="img/bad-cloud-ref" src="img/bad-cloud-vox-none-0.webp" alt="voxel / none" loading="lazy">
+  <figcaption><span class="vlabel">voxel / none</span><span class="badge">21.61 dB · 19.20%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-cloud" data-variant="vox-alpha" tabindex="0">
+  <img data-base="img/bad-cloud-vox-alpha" data-ref="img/bad-cloud-ref" src="img/bad-cloud-vox-alpha-0.webp" alt="voxel / alpha" loading="lazy">
+  <figcaption><span class="vlabel">voxel / alpha</span><span class="badge">21.94 dB · 18.05%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-cloud" data-variant="vox-scale" tabindex="0">
+  <img data-base="img/bad-cloud-vox-scale" data-ref="img/bad-cloud-ref" src="img/bad-cloud-vox-scale-0.webp" alt="voxel / scale" loading="lazy">
+  <figcaption><span class="vlabel">voxel / scale</span><span class="badge">20.68 dB · 22.37%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>wl</h4><div class="row3"><figure class="tile" data-scene="bad-cloud" data-variant="wl-default" tabindex="0">
+  <img data-base="img/bad-cloud-wl-default" data-ref="img/bad-cloud-ref" src="img/bad-cloud-wl-default-0.webp" alt="wl / default" loading="lazy">
+  <figcaption><span class="vlabel">wl / default</span><span class="badge">23.45 dB · 14.83%</span><span class="tag win">best PSNR</span><span class="tag win">best gap</span></figcaption>
+</figure><div class="tile empty">no alpha analogue</div><div class="tile empty">boost 0.75 ≈ scale</div></div></div>
+</section>
+<section class="scene" id="bad-sky">
+<h2>bad-sky</h2>
+<p class="meta">6,840,176 splats → 855,022 at LOD 3 (12.50% kept)</p>
+<div class="refbar">
+  <figure class="tile" data-scene="bad-sky" data-variant="ref" tabindex="0">
+  <img data-base="img/bad-sky-ref" data-ref="img/bad-sky-ref" src="img/bad-sky-ref-0.webp" alt="original (reference)" loading="lazy">
+  <figcaption><span class="vlabel">original (reference)</span><span class="badge"></span></figcaption>
+</figure>
+  <div class="refnote"><h4>How to read this</h4>
+  <p><strong>Hover any tile</strong> to flip it to the original at the same camera. <strong>Click</strong> for a full-size A/B view,
+  where <kbd>space</kbd> holds the original and <kbd>←</kbd><kbd>→</kbd> steps through variants.</p>
+  <p>Badges are mean PSNR and mean gap over 8 azimuths. The slider at the top rotates every image at once.</p></div>
+</div>
+<div class="gridrow"><h4>uniform</h4><div class="row3"><figure class="tile" data-scene="bad-sky" data-variant="uni-none" tabindex="0">
+  <img data-base="img/bad-sky-uni-none" data-ref="img/bad-sky-ref" src="img/bad-sky-uni-none-0.webp" alt="uniform / none" loading="lazy">
+  <figcaption><span class="vlabel">uniform / none</span><span class="badge">19.58 dB · 36.11%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-sky" data-variant="uni-alpha" tabindex="0">
+  <img data-base="img/bad-sky-uni-alpha" data-ref="img/bad-sky-ref" src="img/bad-sky-uni-alpha-0.webp" alt="uniform / alpha" loading="lazy">
+  <figcaption><span class="vlabel">uniform / alpha</span><span class="badge">26.58 dB · 8.19%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-sky" data-variant="uni-scale" tabindex="0">
+  <img data-base="img/bad-sky-uni-scale" data-ref="img/bad-sky-ref" src="img/bad-sky-uni-scale-0.webp" alt="uniform / scale" loading="lazy">
+  <figcaption><span class="vlabel">uniform / scale</span><span class="badge">23.07 dB · 20.88%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>adaptive</h4><div class="row3"><figure class="tile" data-scene="bad-sky" data-variant="ada-none" tabindex="0">
+  <img data-base="img/bad-sky-ada-none" data-ref="img/bad-sky-ref" src="img/bad-sky-ada-none-0.webp" alt="adaptive / none" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / none</span><span class="badge">30.13 dB · 5.10%</span><span class="tag win">best PSNR</span><span class="tag win">best gap</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-sky" data-variant="ada-alpha" tabindex="0">
+  <img data-base="img/bad-sky-ada-alpha" data-ref="img/bad-sky-ref" src="img/bad-sky-ada-alpha-0.webp" alt="adaptive / alpha" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / alpha</span><span class="badge">29.60 dB · 5.62%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-sky" data-variant="ada-scale" tabindex="0">
+  <img data-base="img/bad-sky-ada-scale" data-ref="img/bad-sky-ref" src="img/bad-sky-ada-scale-0.webp" alt="adaptive / scale" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / scale</span><span class="badge">27.73 dB · 8.75%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>voxel</h4><div class="row3"><figure class="tile" data-scene="bad-sky" data-variant="vox-none" tabindex="0">
+  <img data-base="img/bad-sky-vox-none" data-ref="img/bad-sky-ref" src="img/bad-sky-vox-none-0.webp" alt="voxel / none" loading="lazy">
+  <figcaption><span class="vlabel">voxel / none</span><span class="badge">27.40 dB · 8.22%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-sky" data-variant="vox-alpha" tabindex="0">
+  <img data-base="img/bad-sky-vox-alpha" data-ref="img/bad-sky-ref" src="img/bad-sky-vox-alpha-0.webp" alt="voxel / alpha" loading="lazy">
+  <figcaption><span class="vlabel">voxel / alpha</span><span class="badge">27.51 dB · 8.13%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-sky" data-variant="vox-scale" tabindex="0">
+  <img data-base="img/bad-sky-vox-scale" data-ref="img/bad-sky-ref" src="img/bad-sky-vox-scale-0.webp" alt="voxel / scale" loading="lazy">
+  <figcaption><span class="vlabel">voxel / scale</span><span class="badge">26.14 dB · 10.05%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>wl</h4><div class="row3"><figure class="tile" data-scene="bad-sky" data-variant="wl-default" tabindex="0">
+  <img data-base="img/bad-sky-wl-default" data-ref="img/bad-sky-ref" src="img/bad-sky-wl-default-0.webp" alt="wl / default" loading="lazy">
+  <figcaption><span class="vlabel">wl / default</span><span class="badge">25.73 dB · 10.88%</span></figcaption>
+</figure><div class="tile empty">no alpha analogue</div><div class="tile empty">boost 0.75 ≈ scale</div></div></div>
+</section>
+<section class="scene" id="bad-snow-2">
+<h2>bad-snow-2</h2>
+<p class="meta">9,920,439 splats → 620,028 at LOD 4 (6.25% kept)</p>
+<div class="refbar">
+  <figure class="tile" data-scene="bad-snow-2" data-variant="ref" tabindex="0">
+  <img data-base="img/bad-snow-2-ref" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-ref-0.webp" alt="original (reference)" loading="lazy">
+  <figcaption><span class="vlabel">original (reference)</span><span class="badge"></span></figcaption>
+</figure>
+  <div class="refnote"><h4>How to read this</h4>
+  <p><strong>Hover any tile</strong> to flip it to the original at the same camera. <strong>Click</strong> for a full-size A/B view,
+  where <kbd>space</kbd> holds the original and <kbd>←</kbd><kbd>→</kbd> steps through variants.</p>
+  <p>Badges are mean PSNR and mean gap over 8 azimuths. The slider at the top rotates every image at once.</p></div>
+</div>
+<div class="gridrow"><h4>uniform</h4><div class="row3"><figure class="tile" data-scene="bad-snow-2" data-variant="uni-none" tabindex="0">
+  <img data-base="img/bad-snow-2-uni-none" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-uni-none-0.webp" alt="uniform / none" loading="lazy">
+  <figcaption><span class="vlabel">uniform / none</span><span class="badge">20.16 dB · 24.64%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow-2" data-variant="uni-alpha" tabindex="0">
+  <img data-base="img/bad-snow-2-uni-alpha" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-uni-alpha-0.webp" alt="uniform / alpha" loading="lazy">
+  <figcaption><span class="vlabel">uniform / alpha</span><span class="badge">23.96 dB · 15.12%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow-2" data-variant="uni-scale" tabindex="0">
+  <img data-base="img/bad-snow-2-uni-scale" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-uni-scale-0.webp" alt="uniform / scale" loading="lazy">
+  <figcaption><span class="vlabel">uniform / scale</span><span class="badge">19.53 dB · 29.26%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>adaptive</h4><div class="row3"><figure class="tile" data-scene="bad-snow-2" data-variant="ada-none" tabindex="0">
+  <img data-base="img/bad-snow-2-ada-none" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-ada-none-0.webp" alt="adaptive / none" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / none</span><span class="badge">29.42 dB · 4.26%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow-2" data-variant="ada-alpha" tabindex="0">
+  <img data-base="img/bad-snow-2-ada-alpha" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-ada-alpha-0.webp" alt="adaptive / alpha" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / alpha</span><span class="badge">29.63 dB · 4.07%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow-2" data-variant="ada-scale" tabindex="0">
+  <img data-base="img/bad-snow-2-ada-scale" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-ada-scale-0.webp" alt="adaptive / scale" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / scale</span><span class="badge">30.24 dB · 3.62%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>voxel</h4><div class="row3"><figure class="tile" data-scene="bad-snow-2" data-variant="vox-none" tabindex="0">
+  <img data-base="img/bad-snow-2-vox-none" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-vox-none-0.webp" alt="voxel / none" loading="lazy">
+  <figcaption><span class="vlabel">voxel / none</span><span class="badge">29.94 dB · 3.85%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow-2" data-variant="vox-alpha" tabindex="0">
+  <img data-base="img/bad-snow-2-vox-alpha" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-vox-alpha-0.webp" alt="voxel / alpha" loading="lazy">
+  <figcaption><span class="vlabel">voxel / alpha</span><span class="badge">30.28 dB · 3.54%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow-2" data-variant="vox-scale" tabindex="0">
+  <img data-base="img/bad-snow-2-vox-scale" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-vox-scale-0.webp" alt="voxel / scale" loading="lazy">
+  <figcaption><span class="vlabel">voxel / scale</span><span class="badge">30.55 dB · 3.34%</span><span class="tag win">best PSNR</span><span class="tag win">best gap</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>wl</h4><div class="row3"><figure class="tile" data-scene="bad-snow-2" data-variant="wl-default" tabindex="0">
+  <img data-base="img/bad-snow-2-wl-default" data-ref="img/bad-snow-2-ref" src="img/bad-snow-2-wl-default-0.webp" alt="wl / default" loading="lazy">
+  <figcaption><span class="vlabel">wl / default</span><span class="badge">22.75 dB · 17.70%</span></figcaption>
+</figure><div class="tile empty">no alpha analogue</div><div class="tile empty">boost 0.75 ≈ scale</div></div></div>
+</section>
+<section class="scene" id="bad-snow">
+<h2>bad-snow</h2>
+<p class="meta">55,183,186 splats → 862,238 at LOD 6 (1.56% kept)</p>
+<div class="refbar">
+  <figure class="tile" data-scene="bad-snow" data-variant="ref" tabindex="0">
+  <img data-base="img/bad-snow-ref" data-ref="img/bad-snow-ref" src="img/bad-snow-ref-0.webp" alt="original (reference)" loading="lazy">
+  <figcaption><span class="vlabel">original (reference)</span><span class="badge"></span></figcaption>
+</figure>
+  <div class="refnote"><h4>How to read this</h4>
+  <p><strong>Hover any tile</strong> to flip it to the original at the same camera. <strong>Click</strong> for a full-size A/B view,
+  where <kbd>space</kbd> holds the original and <kbd>←</kbd><kbd>→</kbd> steps through variants.</p>
+  <p>Badges are mean PSNR and mean gap over 8 azimuths. The slider at the top rotates every image at once.</p></div>
+</div>
+<div class="gridrow"><h4>uniform</h4><div class="row3"><figure class="tile" data-scene="bad-snow" data-variant="uni-none" tabindex="0">
+  <img data-base="img/bad-snow-uni-none" data-ref="img/bad-snow-ref" src="img/bad-snow-uni-none-0.webp" alt="uniform / none" loading="lazy">
+  <figcaption><span class="vlabel">uniform / none</span><span class="badge">19.26 dB · 37.93%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow" data-variant="uni-alpha" tabindex="0">
+  <img data-base="img/bad-snow-uni-alpha" data-ref="img/bad-snow-ref" src="img/bad-snow-uni-alpha-0.webp" alt="uniform / alpha" loading="lazy">
+  <figcaption><span class="vlabel">uniform / alpha</span><span class="badge">19.73 dB · 35.05%</span><span class="tag win">best PSNR</span><span class="tag win">best gap</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow" data-variant="uni-scale" tabindex="0">
+  <img data-base="img/bad-snow-uni-scale" data-ref="img/bad-snow-ref" src="img/bad-snow-uni-scale-0.webp" alt="uniform / scale" loading="lazy">
+  <figcaption><span class="vlabel">uniform / scale</span><span class="badge">17.88 dB · 41.15%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>adaptive</h4><div class="row3"><figure class="tile" data-scene="bad-snow" data-variant="ada-none" tabindex="0">
+  <img data-base="img/bad-snow-ada-none" data-ref="img/bad-snow-ref" src="img/bad-snow-ada-none-0.webp" alt="adaptive / none" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / none</span><span class="badge">18.27 dB · 43.88%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow" data-variant="ada-alpha" tabindex="0">
+  <img data-base="img/bad-snow-ada-alpha" data-ref="img/bad-snow-ref" src="img/bad-snow-ada-alpha-0.webp" alt="adaptive / alpha" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / alpha</span><span class="badge">19.08 dB · 38.95%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow" data-variant="ada-scale" tabindex="0">
+  <img data-base="img/bad-snow-ada-scale" data-ref="img/bad-snow-ref" src="img/bad-snow-ada-scale-0.webp" alt="adaptive / scale" loading="lazy">
+  <figcaption><span class="vlabel">adaptive / scale</span><span class="badge">17.46 dB · 42.39%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>voxel</h4><div class="row3"><figure class="tile" data-scene="bad-snow" data-variant="vox-none" tabindex="0">
+  <img data-base="img/bad-snow-vox-none" data-ref="img/bad-snow-ref" src="img/bad-snow-vox-none-0.webp" alt="voxel / none" loading="lazy">
+  <figcaption><span class="vlabel">voxel / none</span><span class="badge">17.18 dB · 49.54%</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow" data-variant="vox-alpha" tabindex="0">
+  <img data-base="img/bad-snow-vox-alpha" data-ref="img/bad-snow-ref" src="img/bad-snow-vox-alpha-0.webp" alt="voxel / alpha" loading="lazy">
+  <figcaption><span class="vlabel">voxel / alpha</span><span class="badge">18.12 dB · 44.13%</span><span class="tag warn">needs ALPHA_MAX=4</span></figcaption>
+</figure>
+<figure class="tile" data-scene="bad-snow" data-variant="vox-scale" tabindex="0">
+  <img data-base="img/bad-snow-vox-scale" data-ref="img/bad-snow-ref" src="img/bad-snow-vox-scale-0.webp" alt="voxel / scale" loading="lazy">
+  <figcaption><span class="vlabel">voxel / scale</span><span class="badge">16.99 dB · 47.08%</span></figcaption>
+</figure></div></div>
+<div class="gridrow"><h4>wl</h4><div class="row3"><figure class="tile" data-scene="bad-snow" data-variant="wl-default" tabindex="0">
+  <img data-base="img/bad-snow-wl-default" data-ref="img/bad-snow-ref" src="img/bad-snow-wl-default-0.webp" alt="wl / default" loading="lazy">
+  <figcaption><span class="vlabel">wl / default</span><span class="badge">18.81 dB · 41.52%</span></figcaption>
+</figure><div class="tile empty">no alpha analogue</div><div class="tile empty">boost 0.75 ≈ scale</div></div></div>
+</section>
+
+<h2 id="numbers">Per-scene numbers</h2>
+<h3 id="n-bad-spots">bad-spots</h3>
+<table class="metrics">
+<thead><tr><th>variant</th><th>splats</th><th>PSNR dB</th><th>PSNR worst view</th><th>dark&gt;20 %</th>
+<th>bright&gt;20 %</th><th>gap %</th><th>fragments ×orig</th><th>decimate time</th></tr></thead>
+<tbody>
+<tr>
+<td>uniform / none</td><td class="num">923,979</td>
+<td class="num">18.72</td>
+<td class="num">17.34</td>
+<td class="num">28.19</td><td class="num">18.24</td>
+<td class="num">46.43</td>
+<td class="num">×0.257</td>
+<td class="num">2m14s <span class="hint">5 lv</span></td></tr>
+<tr>
+<td>uniform / alpha</td><td class="num">923,979</td>
+<td class="num">19.84</td>
+<td class="num">17.57</td>
+<td class="num">14.26</td><td class="num">17.34</td>
+<td class="num">31.60</td>
+<td class="num">×0.163</td>
+<td class="num">2m19s <span class="hint">5 lv</span></td></tr>
+<tr>
+<td>uniform / scale</td><td class="num">923,979</td>
+<td class="num">17.57</td>
+<td class="num">12.41</td>
+<td class="num">22.27</td><td class="num">21.87</td>
+<td class="num">44.13</td>
+<td class="num">×0.695</td>
+<td class="num">2m18s <span class="hint">5 lv</span></td></tr>
+<tr>
+<td>adaptive / none</td><td class="num">923,979</td>
+<td class="num">20.58</td>
+<td class="num">16.25</td>
+<td class="num">7.50</td><td class="num">21.49</td>
+<td class="num">28.99</td>
+<td class="num">×0.314</td>
+<td class="num">5m30s <span class="hint">5 lv</span></td></tr>
+<tr>
+<td>adaptive / alpha</td><td class="num">923,979</td>
+<td class="num">21.35</td>
+<td class="num">17.96</td>
+<td class="num">11.13</td><td class="num">9.99</td>
+<td class="num">21.12</td>
+<td class="num">×0.178</td>
+<td class="num">5m32s <span class="hint">5 lv</span></td></tr>
+<tr>
+<td>adaptive / scale</td><td class="num">923,979</td>
+<td class="num">18.81</td>
+<td class="num">13.22</td>
+<td class="num">24.52</td><td class="num">15.74</td>
+<td class="num">40.27</td>
+<td class="num">×0.724</td>
+<td class="num">5m33s <span class="hint">5 lv</span></td></tr>
+<tr>
+<td>voxel / none</td><td class="num">923,979</td>
+<td class="num">22.08</td>
+<td class="num">19.27</td>
+<td class="num">14.31</td><td class="num">6.55</td>
+<td class="num">20.85</td>
+<td class="num">×0.393</td>
+<td class="num">45.9s <span class="hint">1 lv</span></td></tr>
+<tr class="hl">
+<td>voxel / alpha</td><td class="num">923,979</td>
+<td class="num best">23.51</td>
+<td class="num">21.00</td>
+<td class="num">8.16</td><td class="num">5.73</td>
+<td class="num best">13.89</td>
+<td class="num">×0.271</td>
+<td class="num">46.6s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / scale</td><td class="num">923,979</td>
+<td class="num">21.03</td>
+<td class="num">15.04</td>
+<td class="num">12.67</td><td class="num">10.51</td>
+<td class="num">23.18</td>
+<td class="num">×0.772</td>
+<td class="num">46.7s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>wl / default</td><td class="num">923,979</td>
+<td class="num">21.81</td>
+<td class="num">17.81</td>
+<td class="num">11.80</td><td class="num">9.05</td>
+<td class="num">20.85</td>
+<td class="num">×0.545</td>
+<td class="num">—</td></tr>
+</tbody></table>
+<h3 id="n-bad-cloud">bad-cloud</h3>
+<table class="metrics">
+<thead><tr><th>variant</th><th>splats</th><th>PSNR dB</th><th>PSNR worst view</th><th>dark&gt;20 %</th>
+<th>bright&gt;20 %</th><th>gap %</th><th>fragments ×orig</th><th>decimate time</th></tr></thead>
+<tbody>
+<tr>
+<td>uniform / none</td><td class="num">625,000</td>
+<td class="num">20.73</td>
+<td class="num">19.53</td>
+<td class="num">21.74</td><td class="num">6.08</td>
+<td class="num">27.81</td>
+<td class="num">×0.484</td>
+<td class="num">1m04s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>uniform / alpha</td><td class="num">625,000</td>
+<td class="num">22.51</td>
+<td class="num">21.15</td>
+<td class="num">11.02</td><td class="num">6.18</td>
+<td class="num">17.20</td>
+<td class="num">×0.423</td>
+<td class="num">1m04s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>uniform / scale</td><td class="num">625,000</td>
+<td class="num">21.96</td>
+<td class="num">20.81</td>
+<td class="num">9.28</td><td class="num">10.12</td>
+<td class="num">19.40</td>
+<td class="num">×0.538</td>
+<td class="num">1m05s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>adaptive / none</td><td class="num">625,000</td>
+<td class="num">21.06</td>
+<td class="num">18.65</td>
+<td class="num">10.55</td><td class="num">8.20</td>
+<td class="num">18.75</td>
+<td class="num">×0.609</td>
+<td class="num">2m02s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>adaptive / alpha</td><td class="num">625,000</td>
+<td class="num">21.80</td>
+<td class="num">19.54</td>
+<td class="num">10.03</td><td class="num">7.63</td>
+<td class="num">17.66</td>
+<td class="num">×0.574</td>
+<td class="num">2m03s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>adaptive / scale</td><td class="num">625,000</td>
+<td class="num">21.58</td>
+<td class="num">19.39</td>
+<td class="num">11.42</td><td class="num">7.42</td>
+<td class="num">18.83</td>
+<td class="num">×0.609</td>
+<td class="num">2m03s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>voxel / none</td><td class="num">625,000</td>
+<td class="num">21.61</td>
+<td class="num">19.80</td>
+<td class="num">11.47</td><td class="num">7.73</td>
+<td class="num">19.20</td>
+<td class="num">×0.553</td>
+<td class="num">12.6s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / alpha</td><td class="num">625,000</td>
+<td class="num">21.94</td>
+<td class="num">20.06</td>
+<td class="num">10.33</td><td class="num">7.72</td>
+<td class="num">18.05</td>
+<td class="num">×0.487</td>
+<td class="num">12.9s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / scale</td><td class="num">625,000</td>
+<td class="num">20.68</td>
+<td class="num">19.03</td>
+<td class="num">12.35</td><td class="num">10.02</td>
+<td class="num">22.37</td>
+<td class="num">×0.599</td>
+<td class="num">13.0s <span class="hint">1 lv</span></td></tr>
+<tr class="hl">
+<td>wl / default</td><td class="num">625,000</td>
+<td class="num best">23.45</td>
+<td class="num">21.51</td>
+<td class="num">8.64</td><td class="num">6.19</td>
+<td class="num best">14.83</td>
+<td class="num">×0.544</td>
+<td class="num">—</td></tr>
+</tbody></table>
+<h3 id="n-bad-sky">bad-sky</h3>
+<table class="metrics">
+<thead><tr><th>variant</th><th>splats</th><th>PSNR dB</th><th>PSNR worst view</th><th>dark&gt;20 %</th>
+<th>bright&gt;20 %</th><th>gap %</th><th>fragments ×orig</th><th>decimate time</th></tr></thead>
+<tbody>
+<tr>
+<td>uniform / none</td><td class="num">855,022</td>
+<td class="num">19.58</td>
+<td class="num">18.85</td>
+<td class="num">34.32</td><td class="num">1.79</td>
+<td class="num">36.11</td>
+<td class="num">×0.402</td>
+<td class="num">1m13s <span class="hint">3 lv</span></td></tr>
+<tr>
+<td>uniform / alpha</td><td class="num">855,022</td>
+<td class="num">26.58</td>
+<td class="num">25.70</td>
+<td class="num">4.81</td><td class="num">3.39</td>
+<td class="num">8.19</td>
+<td class="num">×0.349</td>
+<td class="num">1m14s <span class="hint">3 lv</span></td></tr>
+<tr>
+<td>uniform / scale</td><td class="num">855,022</td>
+<td class="num">23.07</td>
+<td class="num">21.99</td>
+<td class="num">11.59</td><td class="num">9.29</td>
+<td class="num">20.88</td>
+<td class="num">×0.570</td>
+<td class="num">1m14s <span class="hint">3 lv</span></td></tr>
+<tr class="hl">
+<td>adaptive / none</td><td class="num">855,022</td>
+<td class="num best">30.13</td>
+<td class="num">27.21</td>
+<td class="num">3.13</td><td class="num">1.96</td>
+<td class="num best">5.10</td>
+<td class="num">×0.588</td>
+<td class="num">1m20s <span class="hint">3 lv</span></td></tr>
+<tr>
+<td>adaptive / alpha</td><td class="num">855,022</td>
+<td class="num">29.60</td>
+<td class="num">26.83</td>
+<td class="num">3.46</td><td class="num">2.16</td>
+<td class="num">5.62</td>
+<td class="num">×0.551</td>
+<td class="num">1m21s <span class="hint">3 lv</span></td></tr>
+<tr>
+<td>adaptive / scale</td><td class="num">855,022</td>
+<td class="num">27.73</td>
+<td class="num">24.64</td>
+<td class="num">7.66</td><td class="num">1.08</td>
+<td class="num">8.75</td>
+<td class="num">×0.590</td>
+<td class="num">1m20s <span class="hint">3 lv</span></td></tr>
+<tr>
+<td>voxel / none</td><td class="num">855,022</td>
+<td class="num">27.40</td>
+<td class="num">25.95</td>
+<td class="num">6.54</td><td class="num">1.68</td>
+<td class="num">8.22</td>
+<td class="num">×0.495</td>
+<td class="num">7.6s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / alpha</td><td class="num">855,022</td>
+<td class="num">27.51</td>
+<td class="num">25.94</td>
+<td class="num">6.37</td><td class="num">1.76</td>
+<td class="num">8.13</td>
+<td class="num">×0.437</td>
+<td class="num">7.9s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / scale</td><td class="num">855,022</td>
+<td class="num">26.14</td>
+<td class="num">24.54</td>
+<td class="num">8.32</td><td class="num">1.73</td>
+<td class="num">10.05</td>
+<td class="num">×0.501</td>
+<td class="num">7.9s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>wl / default</td><td class="num">855,022</td>
+<td class="num">25.73</td>
+<td class="num">24.38</td>
+<td class="num">8.04</td><td class="num">2.83</td>
+<td class="num">10.88</td>
+<td class="num">×0.468</td>
+<td class="num">—</td></tr>
+</tbody></table>
+<h3 id="n-bad-snow-2">bad-snow-2</h3>
+<table class="metrics">
+<thead><tr><th>variant</th><th>splats</th><th>PSNR dB</th><th>PSNR worst view</th><th>dark&gt;20 %</th>
+<th>bright&gt;20 %</th><th>gap %</th><th>fragments ×orig</th><th>decimate time</th></tr></thead>
+<tbody>
+<tr>
+<td>uniform / none</td><td class="num">620,028</td>
+<td class="num">20.16</td>
+<td class="num">18.74</td>
+<td class="num">20.29</td><td class="num">4.34</td>
+<td class="num">24.64</td>
+<td class="num">×0.301</td>
+<td class="num">1m13s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>uniform / alpha</td><td class="num">620,028</td>
+<td class="num">23.96</td>
+<td class="num">23.26</td>
+<td class="num">8.99</td><td class="num">6.13</td>
+<td class="num">15.12</td>
+<td class="num">×0.282</td>
+<td class="num">1m15s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>uniform / scale</td><td class="num">620,028</td>
+<td class="num">19.53</td>
+<td class="num">16.96</td>
+<td class="num">11.63</td><td class="num">17.63</td>
+<td class="num">29.26</td>
+<td class="num">×0.366</td>
+<td class="num">1m15s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>adaptive / none</td><td class="num">620,028</td>
+<td class="num">29.42</td>
+<td class="num">28.41</td>
+<td class="num">1.53</td><td class="num">2.72</td>
+<td class="num">4.26</td>
+<td class="num">×0.390</td>
+<td class="num">2m06s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>adaptive / alpha</td><td class="num">620,028</td>
+<td class="num">29.63</td>
+<td class="num">28.61</td>
+<td class="num">1.52</td><td class="num">2.56</td>
+<td class="num">4.07</td>
+<td class="num">×0.368</td>
+<td class="num">2m06s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>adaptive / scale</td><td class="num">620,028</td>
+<td class="num">30.24</td>
+<td class="num">29.17</td>
+<td class="num">1.52</td><td class="num">2.10</td>
+<td class="num">3.62</td>
+<td class="num">×0.385</td>
+<td class="num">2m07s <span class="hint">4 lv</span></td></tr>
+<tr>
+<td>voxel / none</td><td class="num">620,028</td>
+<td class="num">29.94</td>
+<td class="num">28.69</td>
+<td class="num">2.47</td><td class="num">1.38</td>
+<td class="num">3.85</td>
+<td class="num">×0.290</td>
+<td class="num">12.8s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / alpha</td><td class="num">620,028</td>
+<td class="num">30.28</td>
+<td class="num">29.10</td>
+<td class="num">2.23</td><td class="num">1.31</td>
+<td class="num">3.54</td>
+<td class="num">×0.280</td>
+<td class="num">12.6s <span class="hint">1 lv</span></td></tr>
+<tr class="hl">
+<td>voxel / scale</td><td class="num">620,028</td>
+<td class="num best">30.55</td>
+<td class="num">29.53</td>
+<td class="num">2.14</td><td class="num">1.20</td>
+<td class="num best">3.34</td>
+<td class="num">×0.291</td>
+<td class="num">12.7s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>wl / default</td><td class="num">620,028</td>
+<td class="num">22.75</td>
+<td class="num">20.53</td>
+<td class="num">5.97</td><td class="num">11.73</td>
+<td class="num">17.70</td>
+<td class="num">×0.265</td>
+<td class="num">—</td></tr>
+</tbody></table>
+<h3 id="n-bad-snow">bad-snow</h3>
+<table class="metrics">
+<thead><tr><th>variant</th><th>splats</th><th>PSNR dB</th><th>PSNR worst view</th><th>dark&gt;20 %</th>
+<th>bright&gt;20 %</th><th>gap %</th><th>fragments ×orig</th><th>decimate time</th></tr></thead>
+<tbody>
+<tr>
+<td>uniform / none</td><td class="num">862,238</td>
+<td class="num">19.26</td>
+<td class="num">18.63</td>
+<td class="num">27.32</td><td class="num">10.61</td>
+<td class="num">37.93</td>
+<td class="num">×0.386</td>
+<td class="num">4m25s <span class="hint">6 lv</span></td></tr>
+<tr class="hl">
+<td>uniform / alpha</td><td class="num">862,238</td>
+<td class="num best">19.73</td>
+<td class="num">19.06</td>
+<td class="num">24.15</td><td class="num">10.91</td>
+<td class="num best">35.05</td>
+<td class="num">×0.314</td>
+<td class="num">4m34s <span class="hint">6 lv</span></td></tr>
+<tr>
+<td>uniform / scale</td><td class="num">862,238</td>
+<td class="num">17.88</td>
+<td class="num">16.52</td>
+<td class="num">31.76</td><td class="num">9.39</td>
+<td class="num">41.15</td>
+<td class="num">×0.415</td>
+<td class="num">4m32s <span class="hint">6 lv</span></td></tr>
+<tr>
+<td>adaptive / none</td><td class="num">862,238</td>
+<td class="num">18.27</td>
+<td class="num">17.75</td>
+<td class="num">32.80</td><td class="num">11.08</td>
+<td class="num">43.88</td>
+<td class="num">×0.374</td>
+<td class="num">11m11s <span class="hint">6 lv</span></td></tr>
+<tr>
+<td>adaptive / alpha</td><td class="num">862,238</td>
+<td class="num">19.08</td>
+<td class="num">18.51</td>
+<td class="num">28.30</td><td class="num">10.65</td>
+<td class="num">38.95</td>
+<td class="num">×0.291</td>
+<td class="num">10m54s <span class="hint">6 lv</span></td></tr>
+<tr>
+<td>adaptive / scale</td><td class="num">862,238</td>
+<td class="num">17.46</td>
+<td class="num">16.30</td>
+<td class="num">33.60</td><td class="num">8.80</td>
+<td class="num">42.39</td>
+<td class="num">×0.411</td>
+<td class="num">11m20s <span class="hint">6 lv</span></td></tr>
+<tr>
+<td>voxel / none</td><td class="num">862,238</td>
+<td class="num">17.18</td>
+<td class="num">16.83</td>
+<td class="num">41.57</td><td class="num">7.97</td>
+<td class="num">49.54</td>
+<td class="num">×0.394</td>
+<td class="num">1m37s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / alpha</td><td class="num">862,238</td>
+<td class="num">18.12</td>
+<td class="num">17.57</td>
+<td class="num">35.46</td><td class="num">8.67</td>
+<td class="num">44.13</td>
+<td class="num">×0.332</td>
+<td class="num">1m39s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>voxel / scale</td><td class="num">862,238</td>
+<td class="num">16.99</td>
+<td class="num">15.69</td>
+<td class="num">37.18</td><td class="num">9.89</td>
+<td class="num">47.08</td>
+<td class="num">×0.523</td>
+<td class="num">1m34s <span class="hint">1 lv</span></td></tr>
+<tr>
+<td>wl / default</td><td class="num">862,238</td>
+<td class="num">18.81</td>
+<td class="num">17.99</td>
+<td class="num">33.80</td><td class="num">7.72</td>
+<td class="num">41.52</td>
+<td class="num">×0.293</td>
+<td class="num">—</td></tr>
+</tbody></table>
+
+<h2 id="findings">Findings</h2>
+
+<h3>1. Both new decimators clearly beat the shipped uniform one</h3>
+<p>Compared like-for-like at the shipping <code>none</code> policy, mean gap rank is adaptive 5.0 and voxel 5.8 against uniform's
+8.2 — uniform is last of ten. (Across all three policies the ranges overlap, because compensation outweighs the allocator: see
+finding 4.) The margin is not marginal — on
+<strong>bad-sky</strong> and <strong>bad-snow-2</strong> the gap metric falls from 36.1% and 24.6% (uniform, no compensation)
+to 5.1% and 4.3% (adaptive) and 8.2% and 3.9% (voxel). Those are the two scenes where uniform allocation starves whole
+regions, and error-driven allocation is exactly the fix. PSNR agrees: +10.6 dB on bad-sky, +9.8 dB on bad-snow-2.</p>
+
+<h3>2. Build cost is not a differentiator</h3>
+<table class="metrics" style="max-width:620px">
+<thead><tr><th>decimator</th><th>full LOD pyramid<br><span class="hint">all levels, all 5 scenes</span></th>
+<th>×fastest</th><th>render cost<br><span class="hint">mean fragments ×original</span></th></tr></thead><tbody>
+<tr><td>uniform</td>
+<td class="num">10m10s</td>
+<td class="num best">×1.00</td>
+<td class="num">×0.366</td></tr>
+<tr><td>adaptive</td>
+<td class="num">22m10s</td>
+<td class="num">×2.18</td>
+<td class="num">×0.455</td></tr>
+<tr><td>voxel</td>
+<td class="num">12m21s</td>
+<td class="num">×1.21</td>
+<td class="num">×0.425</td></tr>
+<tr><td>wl</td>
+<td class="num">17m47s</td>
+<td class="num">×1.75</td>
+<td class="num">×0.423</td></tr>
+</tbody></table>
+<p class="meta">Uniform and adaptive cascade, so every level is a by-product of one run; voxel and wl are single-pass and pay a
+full source read per level. Compensation is time-neutral (within 2%). Fragment counts are a GPU-measured render-cost proxy —
+<code>alpha</code> is the cheapest of the three modes (×0.16–×0.38) because brighter splats terminate rays sooner.</p>
+<p>Voxel costs 21% more than uniform to build a full pyramid and adaptive 118% more, but all four are the same order of
+magnitude and none of this should decide the outcome. One note worth keeping: voxel's per-level cost is nearly flat (46s, 42s,
+37s, 40s, 46s on bad-spots while the target fell 16×) because the source read dominates. Since its allocator already produces a
+full ordered pick sequence, one pass could in principle emit every level and collapse its pyramid cost to roughly a third of
+uniform's — untested, but the largest cost lever available.</p>
+
+<div class="callout">
+<h4>3. The exception that matters: bad-snow</h4>
+<p><strong>Among <code>none</code> variants, bad-snow is the one scene where the shipped uniform decimator wins</strong> — gap 37.9%
+versus voxel's 49.5%, an 11.6-point regression, and uniform also takes the best <code>none</code> PSNR there (19.26). It is the
+most aggressive reduction in the set, 1.56% of splats kept. This is not a cascade artifact: voxel is single-shot here, so the
+deficit is the allocator's own behaviour at that ratio.</p>
+<p><strong>Compensation closes it, and then some.</strong> <code>uniform / alpha</code> reaches 35.05% — better than the shipped
+<code>uniform / none</code> at 37.93% and the best result on this scene anywhere in the table. <code>voxel / alpha</code> gets to
+44.13% and <code>adaptive / alpha</code> to 38.95%. So bad-snow is not an argument against voxel so much as an argument that this
+scene needs compensation: adopting voxel with <code>none</code> would ship the regression, adopting it with <code>alpha</code>
+would not.</p>
+</div>
+
+<div class="callout info">
+<h4>4. <code>alpha</code> wins on every decimator — after two correctness fixes</h4>
+<p>An earlier version of this report measured <code>alpha</code> through two bugs and concluded it was worse than
+<code>none</code>. With both fixed, <strong>all three <code>alpha</code> variants beat wl on both metrics</strong>, and they take
+the top three places:</p>
+<table class="metrics" style="max-width:560px">
+<thead><tr><th>variant</th><th>PSNR rank</th><th>gap rank</th></tr></thead><tbody>
+<tr><td>voxel / alpha</td><td class="num best">3.4</td><td class="num">3.6</td></tr>
+<tr><td>adaptive / alpha</td><td class="num">3.8</td><td class="num best">3.4</td></tr>
+<tr><td>uniform / alpha</td><td class="num">4.6</td><td class="num">4.2</td></tr>
+<tr><td>wl / default</td><td class="num">4.8</td><td class="num">4.8</td></tr>
+<tr><td>adaptive / none</td><td class="num">5.2</td><td class="num">5.0</td></tr>
+<tr><td>voxel / none</td><td class="num">5.2</td><td class="num">5.8</td></tr>
+</tbody></table>
+<p><strong>Compensation now matters more than the choice of decimator.</strong> Every decimator's <code>alpha</code> variant
+outranks every decimator's <code>none</code> variant. That reframes the decision: the allocator question and the compensation
+question are separable, and compensation is the bigger lever.</p>
+<p>It also changes the bad-snow story. <code>uniform / alpha</code> reaches 35.05 gap there — the best result on that scene in
+the whole table, beating the shipped <code>uniform / none</code> at 37.93. bad-snow is no longer a scene where compensation
+fails to help.</p>
+<p><strong>Bug 1 — input range.</strong> <code>alphaDecode()</code> applied the over-unity range to whatever it read, including
+stock 0..1 sources, inflating input mass ×3.8 at α=0.5 and ×6.6 at α=0.99 — non-uniformly, so it did not cancel in normalised
+merge weights. Before the fix: emitted mass 5.4–6.2× source, 20–77% of survivors pinned at the D=4 ceiling, and on bad-cloud
+97.5% of splats rendering as saturated flat-topped discs, costing the sky region <strong>34 dB</strong>. Fixed by splitting
+<code>inputAlphaMax</code> (the range the input is in) from <code>alphaMax</code> (the range we write).</p>
+<p><strong>Bug 2 — pass-through survivors.</strong> At a 2× step most output splats are not merged at all, they are block-copied
+from the input. Merged splats go through <code>alphaEncode</code> and land in the output convention; copied ones kept the
+<em>input's</em> convention while the file was declared to be in ours, so the untouched majority read ~4× too bright. This hit
+adaptive hardest (mass ×6.2, and its <code>alpha</code> cells scoring below its <code>none</code> cells). Fixed by converting
+opacity on the pass-through path in all three merge streams.</p>
+<p>Verified after both fixes: mass conservation is <strong>×1.000</strong> for uniform, adaptive and voxel on bad-sky, bad-cloud
+and bad-snow-2, with ceiling saturation at 0.0–0.1%. bad-spots sits at ×0.85–0.90, which is genuine clamping at its 3.13% keep
+rate rather than a convention error. The bad-cloud sky recovered from 23.08 dB to 56.95 dB, matching <code>none</code>'s 56.96.</p>
+</div>
+
+<h3>4a. The other two compensation modes</h3>
+<ul>
+<li><strong><code>none</code></strong> — the shipping default — is now beaten by <code>alpha</code> on every decimator, but it
+remains the only option that needs no format or renderer change, and it is still best-in-scene for adaptive on bad-sky
+(5.10 vs 5.62).</li>
+<li><strong><code>alpha</code></strong> is also always the cheapest to render (×0.16–×0.38 fragments), though per the caveat that
+is early ray termination, not a smaller footprint.</li>
+<li><strong><code>scale</code></strong> wins only bad-snow-2 (3.34%) and is consistently the most expensive to render
+(up to ×0.77). Weakest of the three, and unchanged by both fixes — it encodes compensation in geometry, so it never depended on
+the opacity convention.</li>
+</ul>
+
+<h3>5. wl's shipped default still has the best average rank</h3>
+<p>wl takes the best mean rank on both metrics (3.2 PSNR, 3.6 gap), and this <em>is</em> a like-for-like comparison against
+voxel — both reach the final count in a single pass. Head to head on gap, though, it is a split rather than a sweep: voxel wins
+bad-sky (8.2 vs 10.9) and bad-snow-2 (3.9 vs 17.7), wl wins bad-cloud (14.8 vs 19.2) and bad-snow (41.5 vs 49.5), and bad-spots
+ties at 20.85%. On PSNR voxel takes 3 of 5.</p>
+<p>What earns wl its rank is <strong>consistency, not peak quality</strong>: it is never the best cell on any scene and never
+close to the worst. Voxel is better where it wins and much worse on bad-snow. Which of those profiles is preferable is a product
+question — a decimator that is never embarrassing may be worth more than one with a higher ceiling and one bad scene.</p>
+<p>Note that wl's default also includes an <strong>opacity pre-filter</strong> (0.05) that drops faint gaussians before merging,
+and per-tile budgeting. Neither exists in our decimators, and both are cheap to try.</p>
+
+<h3>6. Why wl looks unlike every voxel column — it is allocation, not compensation</h3>
+<p>wl's default stacks three things on the clustering our voxel decimator ports from its write-up: an opacity pre-filter (0.05),
+a coverage boost (0.75, which inflates survivor scales and is the analogue of our <code>scale</code> mode), and
+<strong>per-KD-leaf budgeting</strong> (<code>partition_limit=1e6</code>; absent from the write-up — we allocate globally).
+Switching the first two off isolates the third:</p>
+<table class="metrics" style="max-width:820px">
+<thead><tr><th>scene</th><th>wl default</th><th>filter off</th><th>filter+boost off</th><th>vox none</th><th>vox scale</th></tr></thead>
+<tbody>
+<tr><td>bad-spots</td><td class="num">20.85</td><td class="num">20.85</td><td class="num">22.10</td><td class="num">20.85</td><td class="num">23.18</td></tr>
+<tr><td>bad-cloud</td><td class="num">14.83</td><td class="num">14.73</td><td class="num">15.18</td><td class="num">19.20</td><td class="num">22.37</td></tr>
+<tr><td>bad-sky</td><td class="num">10.88</td><td class="num">11.30</td><td class="num" style="color:var(--warn)">39.12</td><td class="num">8.22</td><td class="num">10.05</td></tr>
+<tr><td>bad-snow-2</td><td class="num">17.70</td><td class="num">16.52</td><td class="num">17.35</td><td class="num best">3.85</td><td class="num best">3.34</td></tr>
+<tr><td>bad-snow</td><td class="num">41.52</td><td class="num">41.41</td><td class="num">51.27</td><td class="num">49.54</td><td class="num">47.08</td></tr>
+</tbody></table>
+<p class="meta">gap %, lower better. Produced by <code>diag-wl.mjs</code> → <code>diag-wl.json</code>.</p>
+
+<p><strong>The opacity filter is nearly irrelevant</strong> — worth under 1.2 points on every scene, even on bad-sky where it
+discards 16% of the input. An earlier assumption in this work was that the filter penalised the sky and cloud scenes; that is
+measurably false.</p>
+
+<p><strong>On bad-snow-2 neither knob explains anything.</strong> With both off, wl is still at 17.35 against voxel's 3.85. The
+difference is where the budget landed. On a 48³ grid, at identical splat counts, wl's occupied cells are almost a strict subset
+of voxel's:</p>
+<table class="metrics" style="max-width:560px">
+<thead><tr><th>bad-snow-2, 620,028 splats each</th><th>cells</th></tr></thead><tbody>
+<tr><td>occupied by wl only</td><td class="num">70</td></tr>
+<tr><td>occupied by both</td><td class="num">1,162</td></tr>
+<tr><td>occupied by voxel only</td><td class="num">1,994</td></tr>
+<tr><td>→ wl covers 1,232 · voxel covers 3,156</td><td class="num">×2.56</td></tr>
+</tbody></table>
+<p>Voxel spreads the same number of splats over 2.6× more of the scene. The gap metric counts holes, so that coverage breadth
+<em>is</em> the 13.5-point difference. Per-leaf budgeting cannot move splats from a bland leaf to a detailed one; global
+allocation can.</p>
+
+<div class="callout">
+<h4>The boost asymmetry, and why porting wl's tiling would be a mistake</h4>
+<p>The same nominal lever moves the two systems in opposite directions:</p>
+<ul>
+<li>wl on bad-sky: <strong>39.12 → 11.30</strong> with the boost on. A 28-point rescue.</li>
+<li>voxel on bad-sky: <strong>8.22 → 10.05</strong> with <code>scale</code>. Slightly worse.</li>
+</ul>
+<p>wl's per-leaf allocation leaves holes that scale inflation papers over, so wl <em>needs</em> its boost. Our global allocation
+already covers, so inflation only adds blur. Adopting wl's tiling would therefore import the very problem its boost exists to
+fix — and the boost is the part we already have and mostly do not want.</p>
+<p>This does not make wl worse everywhere: it still genuinely beats voxel on bad-cloud (14.83 vs 19.20) and bad-snow
+(41.52 vs 49.54), where coverage breadth is not the deciding factor. Whatever wl does better on those two is not explained by
+either knob or by tiling, and is not yet understood.</p>
+</div>
+
+<h3>6a. The decimators' own error metric still assumes <code>none</code></h3>
+<p>Separate from the output-format problem below, the <em>cost</em> that drives merge selection hardcodes the <code>none</code>
+policy. Both the CPU and GPU paths compute the merged opacity a candidate would get as <code>min(1, W / area)</code>
+(<code>edge-cost-cpu.ts</code>, <code>gpu-edge-cost.ts</code>), but the real ceiling under <code>alpha</code> is
+<code>profileMass(alphaMax)</code> — 6.63 at alphaMax 4 — and under <code>scale</code> the merge grows the footprint until the
+mass fits. Neither is modelled.</p>
+<p>So every decimator ranks candidate merges as if the excess mass will be thrown away. Under compensation it will not be, which
+means merges that lose a lot of mass are penalised when they are in fact cheap. The selection is systematically conservative in
+exactly the cases compensation was added to rescue — and the <code>alpha</code> numbers above are therefore a
+<strong>lower bound</strong>: they were achieved with an allocator that never exploited the headroom it was given.</p>
+<p>The fix is to use the active ceiling in the cost and mirror the <code>scale</code> inflation, reusing the same branch the merge
+takes. Two call sites, and the WGSL needs the ceiling baked in as the decode kernel already does. It is deliberately
+<em>not</em> applied here, because it changes selection and would invalidate this comparison; <code>none</code> is unaffected
+(its ceiling is 1), so the blast radius is the <code>alpha</code> and <code>scale</code> cells only.</p>
+
+<h3>7. <code>alpha</code>'s real blocker: three places assume plain 0..1 opacity</h3>
+<p>Now that <code>alpha</code> measures best, what stops us shipping it is that the over-unity convention is implicit. Three
+consumers assume opacity is plain 0..1, and only one of them is the renderer:</p>
+<table class="metrics" style="max-width:760px">
+<thead><tr><th>consumer</th><th><code>none</code></th><th><code>scale</code></th><th><code>alpha</code></th></tr></thead><tbody>
+<tr><td>renderer</td><td class="num">correct</td><td class="num">correct</td><td>needs <code>ST_ALPHA_MAX</code> env var</td></tr>
+<tr><td>LOD error pass (<code>buildErrorCache</code>)</td><td class="num">correct</td><td class="num">correct</td><td style="color:var(--warn)">under-reads alpha ~4×</td></tr>
+<tr><td>SOG writer</td><td class="num">correct</td><td class="num">correct</td><td style="color:var(--warn)">silently destroys it</td></tr>
+</tbody></table>
+<p>The LOD error pass uses plain <code>sigmoid()</code> on stored opacity, so the field-L2 error — and any level assignment built
+on it — is wrong for alpha output. The SOG writer quantises <code>sigmoid(opacity)</code> into 8 bits over 0..1, so an over-unity
+<code>D</code> stored as <code>logit(D/4)</code> comes back as <code>D/4</code> and is written as that: the compensation is not
+mis-rendered, it is permanently lost and the SOG is ~4× too transparent. <code>scale</code> is clean everywhere precisely because
+it encodes compensation in geometry, which every format already carries faithfully.</p>
+<div class="callout info">
+<h4>The fix that unblocks all three: store compensation per gaussian</h4>
+<p>Write one extra scalar per gaussian — the owed-mass ratio <code>κ = W / ellipsoidArea(s)</code> — and leave opacity and scale
+in the plain 0..1 convention. Every mode then becomes a <em>reader</em> policy:</p>
+<ul>
+<li><strong>none</strong> — ignore κ, clamp alpha at 1. Bit-identical to today, and what any third-party tool gets for free.</li>
+<li><strong>alpha</strong> — use κ as the shape parameter D.</li>
+<li><strong>scale</strong> — inflate scales by <code>√κ</code>. Exact, not iterative, since <code>ellipsoidArea</code> is
+homogeneous of degree 2.</li>
+</ul>
+<p>Both non-trivial policies are render-time transforms, implementable in the shader. The consequences are larger than tidiness:
+one decimation run serves all three modes, so this whole comparison becomes a render-time toggle instead of 45 cascades; the
+D=4 ceiling and its 20–77% saturation disappear because κ is unbounded; selection becomes policy-independent, so the modes are
+finally compared on compensation alone rather than on differently-allocated splat sets; and the class of bug fixed above cannot
+recur, because no file's opacity range is ever implicit again. For compressed formats κ needs a quantised channel —
+<code>log2(κ)</code> in 8 bits over [0,8] covers the observed range — and a render-time <code>scale</code> policy changes the
+projected radius, so the binner must use the inflated value.</p>
+</div>
+
+<h2 id="options">Options</h2>
+<p>Roughly in increasing order of commitment. Not mutually exclusive.</p>
+<ul>
+<li><strong>A — Adopt voxel, keep <code>none</code>.</strong> No format change, no renderer change. Much better on 4 of 5 scenes
+and tied-best PSNR rank among the <code>none</code> variants, for <strong>21% more build time</strong> than today. Costs: the
+bad-snow regression is real and would ship (finding 3 — pairing it with <code>alpha</code> removes it), and we give up the
+cheapest-build position.</li>
+<li><strong>B — Adopt adaptive, keep <code>none</code>.</strong> Best gap rank among the <code>none</code> variants (5.0) and a
+shallower bad-snow cliff (43.9% vs 49.5%), but the most expensive option to build — 2.18× uniform and 1.79× voxel.</li>
+<li><strong>A′ — Adopt voxel <em>and</em> make it emit the whole pyramid in one pass</strong> (see 2a). If the pick-sequence
+prefix idea holds, this is strictly better than every other row: voxel's quality at roughly a third of uniform's build cost.
+Highest expected value on this list, and the only one whose payoff is currently unverified.</li>
+<li><strong>C — Voxel by default, uniform retained for bad-snow-like scenes.</strong> Pragmatic hybrid: take the 3.5× win
+everywhere it is safe and keep today's path where aggressive reduction on snow-like content regresses. Needs a decision rule,
+which we do not currently have a metric for at build time.</li>
+<li><strong>D — Voxel + <code>alpha</code>. Now the best-measuring option in the table</strong> (rank 3.2/3.2, better than
+<code>none</code> on all five scenes and cheapest to render). What blocks it is delivery, not quality: the over-unity convention
+lives only in <code>ST_ALPHA_MAX</code>/<code>ST_PLATEAU</code>, so no stock reader renders it correctly — and worse, the SOG
+writer <em>destroys</em> it (opacity is quantised to 8 bits of 0..1) and the LOD error pass under-reads it ~4×. See
+finding 7 for the fix that unblocks all three at once.</li>
+<li><strong>E — Understand wl's remaining edge on bad-cloud and bad-snow.</strong> <em>Revised: do not port the opacity filter or
+the per-leaf tiling.</em> Finding 6 shows the filter is worth under 1.2 points, and that tiling is what forces wl to depend on
+its coverage boost — importing it would add a problem we do not have. But wl still beats voxel on two scenes for reasons finding 6
+does <em>not</em> explain, and those are the two scenes where voxel is weakest. Diagnosing that is the cheapest high-value
+experiment on this list. Note also that adopting wl wholesale costs 75% more build time than today, on CPU rather than GPU.</li>
+</ul>
+
+
+<section id="method">
+<h2>Method and caveats</h2>
+<h3>How each cell was produced</h3>
+<p>Every splat-transform cell was regenerated for this report with the current CLI:</p>
+<p><code>node bin/cli.mjs &lt;in&gt; &lt;decimator flag&gt; &lt;target&gt; --decimate-compensate &lt;mode&gt; &lt;out&gt;</code></p>
+<p>How each level is reached differs by decimator, because the decimators differ:</p>
+<ul>
+<li><strong>uniform and adaptive are cascaded</strong> — the target halves at each level down to the coarsest. That is how the
+LOD pipeline drives them, and it is what keeps peak memory bounded (uniform peaks near 6 GB even at 2× reduction, and these
+sources run to 55M splats). Driver: <code>gen.sh</code>.</li>
+<li><strong>voxel is single-shot</strong> — its allocator reaches any target directly from the source, with no cascade of
+generations, so every LOD is produced from the original scene. Driver: <code>gen-vox.sh</code>.</li>
+<li><strong>wl is single-shot</strong>, at its shipped defaults.</li>
+</ul>
+<p>So voxel and wl are strictly like-for-like, and both are compared against cascaded uniform/adaptive. That difference is a
+property of the algorithms, not a choice made for this report. Intermediate cascade levels were deleted as they were consumed;
+per-level logs are in <code>logs/</code>.</p>
+
+<div class="callout">
+<h4>Caveats that affect how you read the numbers</h4>
+<ul>
+<li><strong>wl ran single-shot, not cascaded.</strong> Its <code>simplify</code> goes straight to the final count in one pass, at
+its shipped defaults (coverage boost 0.75, opacity filter 0.05). It is an unchanged external tool so it was not re-run for this
+report. Boost 0.75 makes its output closest in spirit to our <code>scale</code> mode; it has no <code>alpha</code> analogue.</li>
+<li><strong><code>alpha</code> output is not renderable by a stock viewer.</strong> It stores <code>logit(D / 4)</code>, and the
+convention lives only in the renderer's <code>ST_ALPHA_MAX</code> / <code>ST_PLATEAU</code> environment variables — there is no
+CLI flag and nothing in the file records it. A reader that assumes 0..1 draws the scene roughly 4× too transparent, silently.
+Every <code>alpha</code> render here was produced with <code>ST_ALPHA_MAX=4 ST_PLATEAU=0.40</code>. Treat <code>alpha</code> as a
+research option pending the file-format work, not as something shippable today.</li>
+<li><strong><code>alpha</code> also changes selection, not just opacity.</strong> Because <code>alphaMax</code> feeds the opacity
+decode, the first cascade level reinterprets a source written in the 0..1 convention. That shifts merge weights and selection
+priority, so <code>alpha</code> and <code>none</code> outputs share only 4–44% of their splat positions rather than being the same
+splats with different opacity. Worth deciding whether that is intended before adopting <code>alpha</code>.</li>
+<li><strong><code>ST_PLATEAU=0.40</code> was tuned on the uniform allocator</strong>, on a dark-only objective. It has not been
+re-tuned per decimator, and it is the most likely cause of any over-bright result in the <code>alpha</code> column.</li>
+<li><strong>Fragment counts are a cost proxy, not a frame time.</strong> The renderer breaks its per-pixel loop once
+transmittance saturates, so brighter splats visit fewer fragments. That makes <code>alpha</code> look cheap even though its drawn
+footprint is 4–12% <em>larger</em> than <code>none</code>.</li>
+</ul>
+</div>
+
+<h3>Metric definitions</h3>
+<ul>
+<li><strong>PSNR</strong> — <code>10·log10(255² / MSE)</code>, MSE over RGB, mean across 8 azimuths. "worst view" is the
+single worst azimuth, which is where coverage failure shows up.</li>
+<li><strong>dark&gt;20 / bright&gt;20</strong> — percentage of pixels whose luma is more than 20 below / above the reference at the
+same camera. <strong>gap</strong> is their sum.</li>
+<li><strong>fragments ×orig</strong> — GPU-measured in-footprint fragments relative to rendering the undecimated source.</li>
+</ul>
+<p class="meta">Cameras orbit the original hand-picked viewpoint at fixed radius and elevation, so azimuth 0 is that framing and
+the rest are what you would see walking around it. Renders are lossless WebP, so PSNR is not contaminated by codec loss.</p>
+</section>
+</main>
+<footer>Generated from <code>metrics.json</code> by <code>report.mjs</code>. Regenerate cells with <code>gen.sh</code>, re-render and re-score with <code>render.mjs</code>.</footer>
+
+<div id="lb"><div id="lbhead">
+  <strong id="lbtitle"></strong><span id="lbmetrics" class="meta"></span>
+  <button id="lbflip">show original (hold <kbd>space</kbd>)</button>
+  <span class="meta"><kbd>←</kbd><kbd>→</kbd> variant · <kbd>,</kbd><kbd>.</kbd> azimuth · <kbd>esc</kbd> close</span>
+  <button id="lbclose" style="margin-left:auto">close</button>
+</div><div id="lbimg"><img id="lbi" alt=""></div></div>
+
+<script>
+const M = {"n":8,"rows":[{"scene":"bad-spots","variant":"uni-none","label":"uniform / none","psnr":18.72107669268302,"gap":46.43111014660494,"dark":28.18728298611111,"bright":18.24382716049383},{"scene":"bad-spots","variant":"uni-alpha","label":"uniform / alpha","psnr":19.844921137135053,"gap":31.59784915123457,"dark":14.262321566358024,"bright":17.335527584876544},{"scene":"bad-spots","variant":"uni-scale","label":"uniform / scale","psnr":17.570152649233304,"gap":44.13206500771605,"dark":22.266710069444443,"bright":21.865354938271604},{"scene":"bad-spots","variant":"ada-none","label":"adaptive / none","psnr":20.577224926243836,"gap":28.990065586419753,"dark":7.500168788580247,"bright":21.489896797839506},{"scene":"bad-spots","variant":"ada-alpha","label":"adaptive / alpha","psnr":21.353363384378845,"gap":21.121768904320987,"dark":11.130160108024691,"bright":9.991608796296298},{"scene":"bad-spots","variant":"ada-scale","label":"adaptive / scale","psnr":18.813878950731894,"gap":40.266589506172835,"dark":24.523341049382715,"bright":15.743248456790123},{"scene":"bad-spots","variant":"vox-none","label":"voxel / none","psnr":22.08086061063143,"gap":20.854359567901234,"dark":14.306254822530864,"bright":6.548104745370371},{"scene":"bad-spots","variant":"vox-alpha","label":"voxel / alpha","psnr":23.511546232592064,"gap":13.893928433641975,"dark":8.160035686728396,"bright":5.73389274691358},{"scene":"bad-spots","variant":"vox-scale","label":"voxel / scale","psnr":21.033200232574917,"gap":23.183834876543216,"dark":12.67423804012346,"bright":10.509596836419755},{"scene":"bad-spots","variant":"wl-default","label":"wl / default","psnr":21.810651680886547,"gap":20.84741512345679,"dark":11.796272183641976,"bright":9.051142939814813},{"scene":"bad-cloud","variant":"uni-none","label":"uniform / none","psnr":20.7279879656469,"gap":27.812741126543212,"dark":21.737581983024693,"bright":6.075159143518519},{"scene":"bad-cloud","variant":"uni-alpha","label":"uniform / alpha","psnr":22.51434886791141,"gap":17.200400270061728,"dark":11.024088541666668,"bright":6.176311728395061},{"scene":"bad-cloud","variant":"uni-scale","label":"uniform / scale","psnr":21.957211407624868,"gap":19.399329668209873,"dark":9.276620370370368,"bright":10.122709297839506},{"scene":"bad-cloud","variant":"ada-none","label":"adaptive / none","psnr":21.057364183562072,"gap":18.751422646604937,"dark":10.546826774691358,"bright":8.204595871913579},{"scene":"bad-cloud","variant":"ada-alpha","label":"adaptive / alpha","psnr":21.80306722584629,"gap":17.659119405864196,"dark":10.032383294753085,"bright":7.626736111111111},{"scene":"bad-cloud","variant":"ada-scale","label":"adaptive / scale","psnr":21.575219937898854,"gap":18.83408082561728,"dark":11.417100694444443,"bright":7.4169801311728385},{"scene":"bad-cloud","variant":"vox-none","label":"voxel / none","psnr":21.60644111694957,"gap":19.199556327160494,"dark":11.470534336419753,"bright":7.7290219907407405},{"scene":"bad-cloud","variant":"vox-alpha","label":"voxel / alpha","psnr":21.940949708621602,"gap":18.048490547839506,"dark":10.32860725308642,"bright":7.719883294753087},{"scene":"bad-cloud","variant":"vox-scale","label":"voxel / scale","psnr":20.679395389376854,"gap":22.367573302469136,"dark":12.352261766975309,"bright":10.015311535493828},{"scene":"bad-cloud","variant":"wl-default","label":"wl / default","psnr":23.45227004963975,"gap":14.82790798611111,"dark":8.641806520061728,"bright":6.186101466049382},{"scene":"bad-sky","variant":"uni-none","label":"uniform / none","psnr":19.58241804399463,"gap":36.11142457561729,"dark":34.322747878086425,"bright":1.7886766975308641},{"scene":"bad-sky","variant":"uni-alpha","label":"uniform / alpha","psnr":26.57983470412467,"gap":8.194782021604937,"dark":4.806520061728395,"bright":3.3882619598765427},{"scene":"bad-sky","variant":"uni-scale","label":"uniform / scale","psnr":23.066106473285974,"gap":20.87531346450617,"dark":11.58567226080247,"bright":9.289641203703702},{"scene":"bad-sky","variant":"ada-none","label":"adaptive / none","psnr":30.12816593496163,"gap":5.095534336419753,"dark":3.133222415123457,"bright":1.962311921296296},{"scene":"bad-sky","variant":"ada-alpha","label":"adaptive / alpha","psnr":29.60220609655023,"gap":5.618103780864197,"dark":3.45973186728395,"bright":2.158371913580247},{"scene":"bad-sky","variant":"ada-scale","label":"adaptive / scale","psnr":27.725229478413095,"gap":8.746166087962964,"dark":7.664617091049383,"bright":1.0815489969135803},{"scene":"bad-sky","variant":"vox-none","label":"voxel / none","psnr":27.398366100551797,"gap":8.219352816358025,"dark":6.542438271604938,"bright":1.6769145447530864},{"scene":"bad-sky","variant":"vox-alpha","label":"voxel / alpha","psnr":27.506801912572694,"gap":8.125892168209878,"dark":6.37008101851852,"bright":1.755811149691358},{"scene":"bad-sky","variant":"vox-scale","label":"voxel / scale","psnr":26.136281294454676,"gap":10.048490547839506,"dark":8.316575038580247,"bright":1.731915509259259},{"scene":"bad-sky","variant":"wl-default","label":"wl / default","psnr":25.730644152082043,"gap":10.875072337962962,"dark":8.041546103395062,"bright":2.833526234567901},{"scene":"bad-snow-2","variant":"uni-none","label":"uniform / none","psnr":20.159052873244093,"gap":24.636646412037038,"dark":20.292631172839506,"bright":4.344015239197531},{"scene":"bad-snow-2","variant":"uni-alpha","label":"uniform / alpha","psnr":23.955991178205867,"gap":15.118947723765434,"dark":8.98606288580247,"bright":6.132884837962963},{"scene":"bad-snow-2","variant":"uni-scale","label":"uniform / scale","psnr":19.52791298841909,"gap":29.259162808641978,"dark":11.630618248456791,"bright":17.628544560185187},{"scene":"bad-snow-2","variant":"ada-none","label":"adaptive / none","psnr":29.42329521303977,"gap":4.255690586419754,"dark":1.5332513503086422,"bright":2.7224392361111116},{"scene":"bad-snow-2","variant":"ada-alpha","label":"adaptive / alpha","psnr":29.625258380960652,"gap":4.071952160493828,"dark":1.515625,"bright":2.5563271604938276},{"scene":"bad-snow-2","variant":"ada-scale","label":"adaptive / scale","psnr":30.23913813964256,"gap":3.6177903163580245,"dark":1.5216290509259263,"bright":2.0961612654320985},{"scene":"bad-snow-2","variant":"vox-none","label":"voxel / none","psnr":29.93743689786397,"gap":3.847752700617284,"dark":2.467447916666667,"bright":1.3803047839506173},{"scene":"bad-snow-2","variant":"vox-alpha","label":"voxel / alpha","psnr":30.283851927726786,"gap":3.5381703317901234,"dark":2.2278404706790127,"bright":1.310329861111111},{"scene":"bad-snow-2","variant":"vox-scale","label":"voxel / scale","psnr":30.55212073926811,"gap":3.3410734953703702,"dark":2.1375626929012346,"bright":1.2035108024691357},{"scene":"bad-snow-2","variant":"wl-default","label":"wl / default","psnr":22.748462402849686,"gap":17.703727816358025,"dark":5.974874614197531,"bright":11.728853202160494},{"scene":"bad-snow","variant":"uni-none","label":"uniform / none","psnr":19.26003675486717,"gap":37.92961516203704,"dark":27.31937210648148,"bright":10.610243055555555},{"scene":"bad-snow","variant":"uni-alpha","label":"uniform / alpha","psnr":19.727199810845555,"gap":35.05066068672839,"dark":24.145134066358022,"bright":10.90552662037037},{"scene":"bad-snow","variant":"uni-scale","label":"uniform / scale","psnr":17.87895500152042,"gap":41.145326967592595,"dark":31.759572723765434,"bright":9.385754243827162},{"scene":"bad-snow","variant":"ada-none","label":"adaptive / none","psnr":18.270107814576953,"gap":43.87948495370371,"dark":32.802083333333336,"bright":11.07740162037037},{"scene":"bad-snow","variant":"ada-alpha","label":"adaptive / alpha","psnr":19.08056671735876,"gap":38.95194347993827,"dark":28.298249421296298,"bright":10.653694058641975},{"scene":"bad-snow","variant":"ada-scale","label":"adaptive / scale","psnr":17.46454708176,"gap":42.39388020833333,"dark":33.596354166666664,"bright":8.797526041666666},{"scene":"bad-snow","variant":"vox-none","label":"voxel / none","psnr":17.17971340764418,"gap":49.53614486882716,"dark":41.56626157407407,"bright":7.969883294753087},{"scene":"bad-snow","variant":"vox-alpha","label":"voxel / alpha","psnr":18.117385172862917,"gap":44.13324652777778,"dark":35.46383101851852,"bright":8.669415509259258},{"scene":"bad-snow","variant":"vox-scale","label":"voxel / scale","psnr":16.98752324548341,"gap":47.0766300154321,"dark":37.183690200617285,"bright":9.892939814814813},{"scene":"bad-snow","variant":"wl-default","label":"wl / default","psnr":18.808192319728402,"gap":41.51613136574074,"dark":33.79624807098765,"bright":7.719883294753086}]};
+const az = document.getElementById('az'), azv = document.getElementById('azv'), flip = document.getElementById('flip');
+let A = 0;
+
+// every tile keeps its own base path, so one azimuth change repoints all of them
+const tiles = [...document.querySelectorAll('.tile img[data-base]')];
+const paint = () => {
+  azv.textContent = A + ' / ' + M.n;
+  const f = flip.checked;
+  for (const img of tiles) {
+    img.src = (f ? img.dataset.ref : img.dataset.base) + '-' + A + '.webp';
+  }
+};
+az.addEventListener('input', () => { A = +az.value; paint(); });
+flip.addEventListener('change', paint);
+
+// hover-flip: instant A/B against the original at the same camera
+for (const fig of document.querySelectorAll('.tile[data-variant]')) {
+  const img = fig.querySelector('img');
+  if (!img || fig.dataset.variant === 'ref') continue;
+  const refBase = 'img/' + fig.dataset.scene + '-ref';
+  fig.addEventListener('mouseenter', () => { img.src = refBase + '-' + A + '.webp'; });
+  fig.addEventListener('mouseleave', () => { paint(); });
+}
+
+// ---------- lightbox ----------
+const lb = document.getElementById('lb'), lbi = document.getElementById('lbi');
+const lbtitle = document.getElementById('lbtitle'), lbmetrics = document.getElementById('lbmetrics');
+const lbflip = document.getElementById('lbflip');
+let cur = null, showRef = false;
+
+const order = (scene) => M.rows.filter(r => r.scene === scene).map(r => r.variant);
+const draw = () => {
+  if (!cur) return;
+  const v = showRef ? 'ref' : cur.variant;
+  lbi.src = 'img/' + cur.scene + '-' + v + '-' + A + '.webp';
+  const r = M.rows.find(x => x.scene === cur.scene && x.variant === cur.variant);
+  lbtitle.textContent = cur.scene + ' · ' + (showRef ? 'ORIGINAL' : (r ? r.label : cur.variant));
+  lbmetrics.textContent = r ? ('PSNR ' + r.psnr.toFixed(2) + ' dB · dark ' + r.dark.toFixed(2) + '% · bright ' + r.bright.toFixed(2) + '% · azimuth ' + A) : ('azimuth ' + A);
+  lbflip.classList.toggle('on', showRef);
+};
+const open = (scene, variant) => { cur = { scene, variant }; showRef = variant === 'ref'; lb.classList.add('open'); draw(); };
+const close = () => { lb.classList.remove('open'); cur = null; };
+for (const fig of document.querySelectorAll('.tile[data-variant]')) {
+  fig.addEventListener('click', () => open(fig.dataset.scene, fig.dataset.variant));
+  fig.addEventListener('keydown', e => { if (e.key === 'Enter') open(fig.dataset.scene, fig.dataset.variant); });
+}
+document.getElementById('lbclose').addEventListener('click', close);
+lbflip.addEventListener('click', () => { showRef = !showRef; draw(); });
+addEventListener('keydown', e => {
+  if (!lb.classList.contains('open')) return;
+  if (e.key === 'Escape') return close();
+  if (e.code === 'Space') { e.preventDefault(); showRef = true; draw(); return; }
+  if (e.key === ',' || e.key === '.') {
+    A = (A + (e.key === '.' ? 1 : M.n - 1)) % M.n; az.value = A; paint(); draw(); return;
+  }
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    const o = order(cur.scene); const i = o.indexOf(cur.variant);
+    cur.variant = o[(i + (e.key === 'ArrowRight' ? 1 : o.length - 1)) % o.length];
+    showRef = false; draw();
+  }
+});
+addEventListener('keyup', e => { if (e.code === 'Space' && lb.classList.contains('open')) { showRef = false; draw(); } });
+paint();
+</script>
+</body></html>
