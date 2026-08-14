@@ -49,6 +49,20 @@ type Compensation = {
      */
     alphaMax: number;
     /**
+     * Opacity range the INPUT is written in, which is not the same question as
+     * `alphaMax` (the range we write). A stock PLY stores plain 0..1 opacity, so
+     * a sub-unity splat carries mass = alpha and this must be 1. Only a file we
+     * ourselves wrote under `alpha` compensation is in an over-unity range, and
+     * only then should this match the range it was written with.
+     *
+     * Kept separate because conflating the two silently over-reads every source
+     * scene: decoding a plain 0..1 file at alphaMax 4 inflates mass by ×3.8 at
+     * alpha 0.5 and ×6.6 at alpha 0.99 — non-uniformly, so it does not cancel in
+     * normalised merge weights. Measured effect before this split: 97.5% of
+     * survivors pushed over unity on bad-cloud and its sky losing 34 dB.
+     */
+    inputAlphaMax: number;
+    /**
      * Scalar on the mass target before solving for the profile's shape
      * parameter; 1 = exact 2D-integral match. Integral match is not the right
      * invariant under alpha compositing — a wide opaque plateau occludes more
@@ -59,7 +73,7 @@ type Compensation = {
     massCal: number;
 };
 
-const DEFAULT_COMPENSATION: Compensation = { mode: 'none', alphaMax: 1, massCal: 1 };
+const DEFAULT_COMPENSATION: Compensation = { mode: 'none', alphaMax: 1, inputAlphaMax: 1, massCal: 1 };
 
 // ---------- sigmoid / logit ----------
 
@@ -84,6 +98,10 @@ const setCompensation = (c?: Partial<Compensation>): void => {
     active = c ? { ...DEFAULT_COMPENSATION, ...c } : DEFAULT_COMPENSATION;
     if (active.mode !== 'alpha') active.alphaMax = 1;
     active.alphaMax = Math.max(1, active.alphaMax);
+    // Independent of `mode`: the range the input was written in is a property of
+    // the file, not of what we are about to do to it. A cascade level reading an
+    // over-unity file still has to decode it correctly even under `none`.
+    active.inputAlphaMax = Math.max(1, active.inputAlphaMax);
 };
 
 const getCompensation = (): Compensation => active;
@@ -134,10 +152,14 @@ const profileParamForMass = (m: number): number => {
  * splat must report I(D), otherwise a merged splat's weight silently
  * under-counts the energy it actually emits.
  *
+ * Reads {@link Compensation.inputAlphaMax}, NOT `alphaMax`: this decodes what we
+ * were given, while `alphaEncode` writes what we produce, and the two ranges are
+ * only the same in the middle of a cascade whose earlier levels we wrote.
+ *
  * @param stored - Stored opacity logit.
  * @returns The mass the splat carries.
  */
-const alphaDecode = (stored: number) => profileMass(active.alphaMax * sigmoid(stored));
+const alphaDecode = (stored: number) => profileMass(active.inputAlphaMax * sigmoid(stored));
 
 /**
  * Mass -> stored logit. Solves for the shape parameter first, so what lands in
@@ -150,6 +172,30 @@ const alphaEncode = (mass: number) => {
     const D = profileParamForMass(mass * active.massCal);
     return logit(Math.max(0, Math.min(1, D / active.alphaMax)));
 };
+
+/**
+ * True when the input and output opacity conventions differ, so a splat copied
+ * verbatim out of the input would be misread on the way back in.
+ *
+ * Merged splats are always written through {@link alphaEncode} and so are
+ * automatically in the output convention. Pass-through survivors are not: a
+ * decimator that block-copies an untouched row is copying the INPUT's range into
+ * a file declared to be in ours, which reads ~`alphaMax` times too bright.
+ *
+ * @returns Whether {@link convertStoredOpacity} is required.
+ */
+const needsOpacityConversion = (): boolean => active.alphaMax !== active.inputAlphaMax || active.massCal !== 1;
+
+/**
+ * Re-encode one stored opacity from the input convention into the output one.
+ * Mathematically the identity when the two agree, but not bit-exact through
+ * logit/sigmoid, so callers gate on {@link needsOpacityConversion} to leave the
+ * unaffected paths byte-for-byte unchanged.
+ *
+ * @param stored - Stored opacity logit in the INPUT convention.
+ * @returns Stored opacity logit in the OUTPUT convention.
+ */
+const convertStoredOpacity = (stored: number): number => alphaEncode(alphaDecode(stored));
 
 const logAddExp = (a: number, b: number) => {
     if (a === -Infinity) return b;
@@ -587,6 +633,8 @@ export {
     DEFAULT_COMPENSATION,
     alphaDecode,
     alphaEncode,
+    needsOpacityConversion,
+    convertStoredOpacity,
     sigmoid,
     logit,
     logAddExp,

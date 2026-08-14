@@ -3,7 +3,7 @@ import { type ResidentPositions } from './partition';
 import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
 import { type SelectionResult } from './select';
 import { WorkerQueue } from '../workers';
-import { type Compensation } from './moment-match';
+import { convertStoredOpacity, needsOpacityConversion, setCompensation, type Compensation } from './moment-match';
 
 /** Context for the merge stream: the priority context plus the selection. */
 type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
@@ -43,6 +43,11 @@ async function *mergeStream(
     const { source, pos, order, blocks, selection, nextPositions } = ctx;
     const { memberGroup, groupMin, groupOffsets, groupMembers } = selection;
     const { layouts, availableLayers } = source.meta;
+
+    // The merge itself runs in workers, which set this per task, but the
+    // pass-through path re-encodes here on the calling thread.
+    setCompensation(ctx.compensation);
+    const convertOpacity = needsOpacityConversion();
 
     const colorDim = layouts.color!.stride >> 2;
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
@@ -145,7 +150,15 @@ async function *mergeStream(
                 px = pos.x[g];
                 py = pos.y[g];
                 pz = pos.z[g];
-                if (dest.geometric) dest.geometric.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
+                if (dest.geometric) {
+                    dest.geometric.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
+                    // The row still carries the INPUT's opacity convention while
+                    // the output is written in ours; merged rows came back from
+                    // alphaEncode already, these never touched it.
+                    if (convertOpacity) {
+                        dest.geometric[rows * 8 + 7] = convertStoredOpacity(view.geo[i * 8 + 7]);
+                    }
+                }
                 if (dest.color) dest.color.set(view.color.subarray(i * colorDim, (i + 1) * colorDim), rows * colorDim);
                 if (dest.other) dest.other.set(other!.subarray(i * otherDim, (i + 1) * otherDim), rows * otherDim);
             } else {

@@ -2,7 +2,7 @@ import { type ChunkPayload } from './block-producer';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
 import { type SelectionResult } from './select';
-import { type Compensation } from '../decimate/moment-match';
+import { convertStoredOpacity, needsOpacityConversion, setCompensation, type Compensation } from '../decimate/moment-match';
 import { WorkerQueue } from '../workers';
 
 /** Context for the merge stream: the priority context plus the selection. */
@@ -41,6 +41,10 @@ async function *mergeStream(
     const colorDim = layouts.color!.stride >> 2;
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = hasOther ? layouts.other!.stride >> 2 : 0;
+
+    // Merges re-encode inside the worker; pass-through rows are converted here.
+    setCompensation(ctx.compensation);
+    const convertOpacity = needsOpacityConversion();
 
     // Rolling output buffers (reused across payloads: the consumer copies
     // before pulling the next chunk).
@@ -148,6 +152,10 @@ async function *mergeStream(
                 outPos[rows * 3 + 1] = pos.y[g];
                 outPos[rows * 3 + 2] = pos.z[g];
                 outGeo.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
+                // Untouched row: convert the input's opacity convention to ours.
+                if (convertOpacity) {
+                    outGeo[rows * 8 + 7] = convertStoredOpacity(view.geo[i * 8 + 7]);
+                }
                 outColor.set(view.color.subarray(i * colorDim, (i + 1) * colorDim), rows * colorDim);
                 if (outOther) outOther.set(other!.subarray(i * otherDim, (i + 1) * otherDim), rows * otherDim);
             } else {

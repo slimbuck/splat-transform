@@ -4,7 +4,7 @@ import { type DestBuffers } from './block-producer';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, type PriorityContext } from './priority';
 import { WorkerQueue } from '../workers';
-import { type Compensation } from './moment-match';
+import { convertStoredOpacity, needsOpacityConversion, setCompensation, type Compensation } from './moment-match';
 
 type BlockMergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
     plans: StoredBlockPlan[];
@@ -34,6 +34,10 @@ async function *blockPlanMergeStream(
     const colorDim = layouts.color!.stride >> 2;
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = hasOther ? layouts.other!.stride >> 2 : 0;
+
+    // Merges re-encode inside the worker; pass-through rows are converted here.
+    setCompensation(ctx.compensation);
+    const convertOpacity = needsOpacityConversion();
 
     let rows = 0;
     let emitted = 0;
@@ -101,7 +105,13 @@ async function *blockPlanMergeStream(
                 px = pos.x[owned[i]];
                 py = pos.y[owned[i]];
                 pz = pos.z[owned[i]];
-                if (dest.geometric) dest.geometric.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
+                if (dest.geometric) {
+                    dest.geometric.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
+                    // Untouched row: convert the input's opacity convention to ours.
+                    if (convertOpacity) {
+                        dest.geometric[rows * 8 + 7] = convertStoredOpacity(view.geo[i * 8 + 7]);
+                    }
+                }
                 if (dest.color) dest.color.set(view.color.subarray(i * colorDim, (i + 1) * colorDim), rows * colorDim);
                 if (dest.other) dest.other.set(other!.subarray(i * otherDim, (i + 1) * otherDim), rows * otherDim);
             } else {

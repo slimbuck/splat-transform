@@ -26,10 +26,11 @@ const LEAF_STRIDE = 8;
  * determinant out of the denormals a zero-thickness splat would otherwise
  * produce.
  *
- * @param alphaMax - Opacity ceiling from the compensation option.
+ * @param inputAlphaMax - Opacity range the INPUT file is written in (1 for a
+ * stock PLY). Decoding, not encoding, so this is not the compensation ceiling.
  * @returns WGSL source.
  */
-const decodeWgsl = (alphaMax: number) => /* wgsl */`
+const decodeWgsl = (inputAlphaMax: number) => /* wgsl */`
 struct Uniforms {
     slotBase: u32,
     slotCount: u32,
@@ -43,7 +44,7 @@ struct Uniforms {
 @group(0) @binding(5) var<storage, read_write> tile: array<f32>;
 
 const TILE_STRIDE: u32 = ${VOXEL_TILE_STRIDE}u;
-const ALPHA_MAX: f32 = ${alphaMax.toFixed(6)};
+const ALPHA_MAX: f32 = ${inputAlphaMax.toFixed(6)};
 const SH_C0: f32 = 0.28209479177387814;
 const EPS_W: f32 = 1e-12;
 const EPS_COV: f32 = 1e-8;
@@ -522,9 +523,10 @@ class GpuVoxelSelect {
             );
         }
 
-        // Compensation is fixed for the run, same as the merge site: alphaMax
-        // enters the representative weight through the decoded opacity.
-        const { alphaMax } = getCompensation();
+        // Compensation is fixed for the run, same as the merge site. This kernel
+        // DECODES the input, so it takes inputAlphaMax — the range the source
+        // file is written in — not alphaMax, which is the range we will write.
+        const { inputAlphaMax } = getCompensation();
 
         const posBuf = new StorageBuffer(device, maxN * 3 * 4, BUFFERUSAGE_COPY_DST);
         const geoBuf = new StorageBuffer(device, maxN * 8 * 4, BUFFERUSAGE_COPY_DST);
@@ -550,7 +552,7 @@ class GpuVoxelSelect {
         let cellBufActive = cellBuf;
 
         const decode: Kernel = makeKernel(
-            device, 'voxel-decode', decodeWgsl(alphaMax),
+            device, 'voxel-decode', decodeWgsl(inputAlphaMax),
             ['slotBase', 'slotCount'],
             [['pos', true], ['geo', true], ['dc', true], ['order', true], ['tile', false]]
         );

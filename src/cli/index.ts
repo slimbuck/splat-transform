@@ -207,6 +207,7 @@ const cliOptionsConfig = {
     'decimate-adaptive': { type: 'string', multiple: true },
     'decimate-voxel': { type: 'string', multiple: true },
     'decimate-compensate': { type: 'string' },
+    'decimate-input-alpha-max': { type: 'string' },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
@@ -315,8 +316,12 @@ const parseArguments = async () => {
     // `none|alpha|scale`, optionally `alpha:<max>` / `alpha:<max>:<massCal>` to
     // override the opacity range and plateau calibration. Defaults keep the
     // shipped behaviour: discard the excess.
-    const parseCompensation = (value: string | undefined): Compensation => {
-        if (!value) return DEFAULT_COMPENSATION;
+    const parseCompensation = (value: string | undefined, inputRange: string | undefined): Compensation => {
+        // The input's own range is a property of the file, so it applies even
+        // with no --decimate-compensate at all (reading an over-unity file under
+        // `none` still has to decode it correctly).
+        const inputAlphaMax = inputRange === undefined ? 1 : parseNumber(inputRange, 1);
+        if (!value) return { ...DEFAULT_COMPENSATION, inputAlphaMax };
         const [mode, maxStr, calStr] = value.split(':');
         if (mode !== 'none' && mode !== 'alpha' && mode !== 'scale') {
             throw new Error(`Invalid --decimate-compensate mode: ${mode}. Expected none, alpha or scale.`);
@@ -327,6 +332,7 @@ const parseArguments = async () => {
         return {
             mode,
             alphaMax: mode === 'alpha' ? parseNumber(maxStr ?? '4', 1) : 1,
+            inputAlphaMax,
             massCal: mode === 'alpha' ? parseNumber(calStr ?? '1', 0) : 1
         };
     };
@@ -559,7 +565,7 @@ const parseArguments = async () => {
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
         memoryBudgetBytes: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
-        compensation: parseCompensation(v['decimate-compensate']),
+        compensation: parseCompensation(v['decimate-compensate'], v['decimate-input-alpha-max'] as string | undefined),
         lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -849,6 +855,11 @@ ACTIONS (executed in order; can be repeated)
         --decimate-compensate <mode>        Merged mass above unit alpha: none (default, discard),
                                             alpha[:max[:massCal]] (keep as peak opacity >1),
                                             scale (grow footprint to fit).
+        --decimate-input-alpha-max <n>      Opacity range the INPUT is written in. Default 1 (a stock
+                                            PLY). Set this only when the input is itself the output of
+                                            an earlier --decimate-compensate alpha:<n> run, e.g. the
+                                            previous level of a cascade; otherwise its opacity is
+                                            over-read and merged mass is inflated.
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory
     -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
